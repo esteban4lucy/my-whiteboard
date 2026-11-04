@@ -1,0 +1,150 @@
+# My Whiteboard
+
+A private, offline-first, Mural-style whiteboard that runs in your browser on phone, tablet and desktop, and keeps everything in your Google Drive folder **Whiteboard**.
+
+* **App URL:** *(added once hosting is set up; planned: `https://<your-github-username>.github.io/my-whiteboard/`)*
+* **Drive folder:** https://drive.google.com/drive/folders/11C9mAo7-4w-oWULU_HL98k3_knVlI7jQ
+* **Source code:** `Whiteboard/source/` (zip plus the individual files)
+
+---
+
+## 1. Why this approach (Option A: Progressive Web App)
+
+* **It's the only option that works offline from the same bookmarked link.** After the first visit, a *service worker* stores the whole app on the device, so the URL opens with no connection, like an installed app. Apps Script web apps (Option B) can't do this, because they always load from Google's servers. Option C (local files) can't be the same URL on every device.
+* **No server and nothing to pay for.** It's plain static files (HTML/CSS/JS, no build step and no third-party libraries). Your browser talks directly to the Google Drive API with your own Google sign-in. Hosting is free (GitHub Pages).
+* **Your data lives only in your Drive folder** and on the devices where you use the app.
+
+## 2. Architecture
+
+```
+ Browser (phone / tablet / desktop)
+ ┌───────────────────────────────────────────────────────────────┐
+ │  index.html + js/*.js     the app (canvas whiteboard, vanilla JS) │
+ │  sw.js                    service worker: caches the app → opens offline │
+ │  IndexedDB "my-whiteboard"  LOCAL SOURCE OF TRUTH:              │
+ │     boards · templates · pictures (blobs) · settings          │
+ │  sync engine (js/sync.js) ⇄ Google Drive API v3 (js/drive.js)   │
+ └───────────────────────────────────────────────────────────────┘
+                     │  HTTPS, OAuth token from Google Identity Services
+                     ▼
+ Google Drive › Whiteboard/   (JSON + pictures, see §3)
+```
+
+| File | Role |
+|---|---|
+| `index.html`, `css/app.css` | Layout: top bar, bottom toolbar, boards drawer, dialogs. Mobile-first, with touch targets of 38–48 px. |
+| `config.js` | **The only file you edit:** OAuth Client ID, allowed e-mail, folder id, version settings. |
+| `js/app.js` | UI, tools, gestures (pinch/pan), boards, search, templates, export, sign-in. |
+| `js/render.js` | Canvas drawing for live view and exports; hit-testing. |
+| `js/db.js` | IndexedDB wrapper. |
+| `js/sync.js` | Offline→online sync, conflict handling, version history. |
+| `js/drive.js` | Google Drive adapter (GIS token + Drive REST v3 via `fetch`). |
+| `js/mockdrive.js` | Fake Drive used only by automated tests (`?mock=1`). The normal app never loads it. |
+| `js/export.js` | PNG / PDF / JSON export (the PDF writer is built in, with no library). |
+| `js/templates.js` | Built-in templates. |
+| `sw.js`, `manifest.webmanifest`, `icons/` | PWA: offline cache and "Add to Home Screen". |
+
+## 3. Drive folder structure
+
+```
+Whiteboard/
+├── README (this file)
+├── boards/      one JSON file per board:  "<Board name>.board.json"
+├── versions/    last 5 snapshots per board: "<Board> — <date> UTC (<reason>).json"
+├── images/      pictures you uploaded to boards
+├── templates/   templates you saved ("<Name>.template.json"); copies of the 5 built-ins
+├── documents/   optional: documents you upload from the app to link on boards
+└── source/      the app's source code (zip + files) so you can edit/redeploy it
+```
+
+A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt }`. Items are strokes, shapes, text, sticky notes, pictures and link cards. The app identifies a board by the `boardId` stored in the file's Drive properties, so renaming a file in Drive does not break anything. **Organisation:** boards form one flat list (newest first) with full search. This is the simplest structure that stays reliable.
+
+## 4. One-time setup (about 10 minutes, free)
+
+### 4a. Create the Google OAuth Client ID
+1. Go to <https://console.cloud.google.com/> (signed in with your Google account) › project picker › **New project** › name it `My Whiteboard` › Create.
+2. **APIs & Services › Library** › search **Google Drive API** › **Enable**.
+3. **APIs & Services › OAuth consent screen** (now called *Google Auth Platform*):
+   * User type **External** › App name `My Whiteboard`, support e-mail = your address, developer contact = your address › Save.
+   * **Data access / Scopes:** add `https://www.googleapis.com/auth/drive`.
+   * **Audience / Test users:** add **your own Gmail address**. Leave publishing status on **Testing**.
+4. **APIs & Services › Credentials › Create credentials › OAuth client ID**:
+   * Application type **Web application**, name `My Whiteboard web`.
+   * **Authorised JavaScript origins:** the origin of the hosting URL, with **no path and no trailing slash**, e.g. `https://<your-github-username>.github.io`. To try the app locally as well, also add `http://localhost:8000`.
+   * Authorised redirect URIs: leave empty. Click Create and copy the **Client ID** (`…apps.googleusercontent.com`). No client secret or API key is needed.
+5. Open `config.js` and paste it: `CLIENT_ID: '1234-abc.apps.googleusercontent.com'`. Optionally set `ALLOWED_EMAIL: 'you@gmail.com'`, which makes the app refuse any other Google account.
+6. In `sw.js`, bump `VERSION` (e.g. `v1.0.1`) whenever you change any file, so devices pick up the change.
+
+> **"Google hasn't verified this app" warning:** this is expected for a personal app. Click **Continue**. In *Testing* mode Google may ask you to approve again about once a week. To avoid that, you can set the publishing status to *In production* without verification; it remains limited to you and still shows the warning screen.
+
+### 4b. Host it (GitHub Pages, free, permanent URL)
+1. Create a GitHub repository named `my-whiteboard` and upload the contents of `source/my-whiteboard.zip` (the files go at the root of the repo, including the empty `.nojekyll`).
+2. Go to repo **Settings › Pages** › Source: *Deploy from a branch* › `main` / `(root)` › Save.
+3. After about a minute the app is at `https://<your-github-username>.github.io/my-whiteboard/`. Bookmark it and add it to your phone's home screen.
+
+The app uses relative paths only, so it works under any sub-path. The repository holds **only code, never your data**, so a public repo is fine. The Client ID is not a secret.
+
+## 5. Using it
+
+* **Open:** go to the URL. On a new device, tap **Sign in with Google** once; your boards then download from Drive.
+* **Install:** on iPhone, open Safari › Share › *Add to Home Screen*. On Android/Chrome, use ⋮ › *Install app*. On desktop Chrome/Edge, click the install icon in the address bar.
+* **Tools (bottom bar):** Select/move · Pen · Highlighter · Eraser (removes whole strokes/shapes) · Shapes (tap again to pick rectangle, ellipse, line or arrow) · Text · Sticky note (tap again to pick its colour) · **+** Insert (upload a picture, picture from URL, link a document) · Colour & thickness.
+* **Selecting an item** shows a small action bar: colour, edit, open/preview (links), duplicate, bring to front, send to back, delete. Drag an item to move it; drag the round handle to resize it.
+* **Touch:** use one finger to draw or move. Use two fingers to pan and zoom. With the Select tool, dragging empty space pans. Double-tap a note to edit it.
+* **Desktop:** the mouse wheel pans and Ctrl+wheel zooms. Space+drag also pans. Shortcuts: V P H E S T N, Ctrl+Z, Ctrl+Shift+Z, Delete and Ctrl+F. You can paste pictures, links or text, and drag and drop picture files.
+* **Links and documents:** + › *Link a document* lets you paste any Google Doc, Sheet or Slides link, Drive file link or web page. You can also choose a file from `Whiteboard/documents` or upload one there. The card's **Open ↗** button opens the original, and **Preview** embeds it while you're online.
+* **Pictures:** *Upload picture* stores the image on the device right away and uploads it to `Whiteboard/images` on the next sync. *Picture from URL* keeps the link and also caches a copy so it shows offline.
+* **Boards (☰):** create, switch, rename, duplicate and delete. Tap the board title to rename it. Deleted boards go to the Drive bin, where they can be recovered for 30 days.
+* **Templates:** ☰ › **+ New board** lets you pick Blank, Meeting Notes, Brainstorm, Project Plan, Weekly Review or one of your own. To make your own, customise any board and use ⋯ › **Save board as template**. Saving with the same name updates the template.
+* **Search (🔍):** searches every board's sticky notes, free text, link titles and board names. Results are grouped by board; tap one to jump to it.
+* **Export (⋯):** PNG image, PDF (always light, for printing), or JSON backup. *Import JSON* recreates a board.
+* **Theme:** the ◐ button, or ⋯ › Dark/Light mode. The choice is remembered on each device.
+
+## 6. Offline and sync behaviour
+
+* **Every change is saved to the device first (IndexedDB)**, so nothing waits for the network. After a short pause the sync engine pushes changes to Drive.
+* **The status pill** (top right) shows: `Synced` (green), `Syncing…`, `Saved locally` (changes waiting), `Offline · N` (N changes waiting), `Sign in` (session expired: tap it), `Sync error` (tap to retry) or `Local only` (no Client ID configured). **Tap the pill at any time to force a sync.** ⋯ › *Sync now* does the same.
+* **Sync runs** automatically after edits, when the device comes back online, when you return to the tab, and every 60 s while the app is open. It pushes local changes and pulls changes made on your other devices, including pictures, which are downloaded so they also work offline.
+* **The app works offline right after the first visit.** ⋯ › *Offline status & help* confirms that "Offline app: ✅ ready". The app also asks the browser to keep its storage persistent.
+* **Conflicts (last-write-wins):** if the same board changed on two devices before syncing, the copy with the most recent edit wins. The other copy is never lost: it is saved to version history, and a notice explains what happened, with a **History** button.
+* **Deleted elsewhere:** a board deleted on another device disappears here too, unless this device has unsynced edits to it, in which case it is re-uploaded.
+* **Sign-in tokens** last about an hour. When one expires, your edits keep saving locally and the pill shows **Sign in**. Tap it; usually there is no prompt.
+
+## 7. Version history
+
+* The last **5** versions of each board are kept in `Whiteboard/versions/`, and older ones are moved to the Drive bin. A version is saved:
+  * automatically, at most every **10 minutes** while you edit and sync,
+  * when a board is created,
+  * whenever a conflict overwrites a copy,
+  * before you restore an older version,
+  * whenever you tap **Save version now**.
+* **To roll back:** open the board › ⋯ › **Version history** › **Restore** next to the version you want. The current state is saved as a version first, so a restore can itself be undone. Restoring needs a connection.
+* Each version is plain JSON, so you can also download one from Drive and use ⋯ › *Import JSON*.
+* You can change the settings in `config.js`: `MAX_VERSIONS` and `VERSION_INTERVAL_MINUTES`.
+
+## 8. Privacy and security
+
+* Only Google accounts listed as test users on your OAuth consent screen can sign in, and `ALLOWED_EMAIL` restricts it further to you. There are no sharing features.
+* The app has no backend. Drive data goes straight from your browser to Google, and nobody else has a copy.
+* **Why the full `drive` scope:** the narrower `drive.file` scope only lets an app see files it created itself. Your `Whiteboard` folder was created separately, and you link existing Docs and Sheets, so `drive.file` would not see them. The app itself only reads and writes inside `Whiteboard/`, plus the names of documents you link.
+* The local copy lives in the browser's storage on each device. ⋯ › **Sign out** offers *Sign out & clear*, which removes it from a device. The short-lived access token is kept in that browser's local storage.
+
+## 9. Changing the app later
+
+Edit the files, bump `VERSION` in `sw.js`, and upload them to the GitHub repo. Open devices show "A new version is ready – Reload". Keep a copy in `Whiteboard/source/`.
+
+## 10. Known limits (v1)
+
+* There is no multi-select or lasso yet: select one item at a time.
+* The eraser removes whole strokes and shapes rather than partial pixels.
+* Some websites refuse to be shown in the Preview frame; **Open ↗** always works.
+* Pictures added by URL from sites that block cross-site access can't be included in PNG/PDF exports. Upload them instead.
+* Version history and documents in `Whiteboard/documents` need a connection to view.
+
+## 11. How it was tested
+
+These automated browser tests ran in headless Chrome with real touch events, with the app served under a `/my-whiteboard/` sub-path as on GitHub Pages:
+* **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.
+* **Offline cycle with a simulated Drive:** the app reloads while offline, offline edits survive, it syncs on reconnect, remote changes are pulled, both conflict directions are handled, versions are pruned to 5 and restore works, deletions sync, and a "new device" first run downloads boards and pictures.
+* **The real Drive adapter** against an emulated Drive v3 REST API: folder discovery and creation, multipart uploads, UTF-8, pulls, version pruning, token expiry and re-sign-in, recovery after the folder is trashed, and rejection of other accounts.
+* **Not covered:** real Google sign-in and live Drive calls can't be automated. These are checked by hand on first use after the Client ID is added.

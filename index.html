@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>My Whiteboard</title>
+  <meta name="description" content="Private, offline-first whiteboard synced to Google Drive.">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Whiteboard">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <button id="btnBoards" class="tool" title="Boards" aria-label="Boards"></button>
+    <button id="boardName" class="board-name" title="Rename board">My Whiteboard</button>
+    <div class="spacer"></div>
+    <button id="syncPill" class="pill" data-state="local" aria-live="polite">…</button>
+    <button id="btnSearch" class="tool" title="Search (Ctrl+F)" aria-label="Search"></button>
+    <button id="btnTheme" class="tool" title="Light / dark" aria-label="Toggle light or dark mode"></button>
+    <button id="btnMore" class="tool" title="More" aria-label="More"></button>
+  </header>
+
+  <canvas id="board" aria-label="Whiteboard canvas"></canvas>
+  <textarea id="editor" class="editor" hidden spellcheck="true" aria-label="Edit text"></textarea>
+  <div id="ctxbar" class="ctxbar" hidden></div>
+
+  <div class="history">
+    <button id="btnUndo" class="tool" title="Undo (Ctrl+Z)" aria-label="Undo" disabled></button>
+    <button id="btnRedo" class="tool" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled></button>
+  </div>
+  <div class="zoom">
+    <button id="zoomOut" class="tool" aria-label="Zoom out"></button>
+    <button id="zoomPct" class="zoom-pct" title="Reset to 100%">100%</button>
+    <button id="zoomIn" class="tool" aria-label="Zoom in"></button>
+    <button id="zoomFit" class="tool" aria-label="Fit board to screen" title="Fit to screen"></button>
+  </div>
+  <nav id="toolbar" class="toolbar" aria-label="Tools"></nav>
+
+  <div id="drawerScrim" class="scrim"></div>
+  <aside id="drawer" class="drawer" aria-label="Boards">
+    <div class="drawer-head">
+      <strong>Boards</strong>
+      <button id="drawerClose" class="tool" aria-label="Close">✕</button>
+    </div>
+    <button id="btnNewBoard" class="btn primary block">+ New board</button>
+    <div id="boardList" class="board-list"></div>
+  </aside>
+
+  <div id="modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="sheet-head"><h2 id="modalTitle"></h2><button id="modalClose" class="tool" aria-label="Close">✕</button></div>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <input type="file" id="fileImage" accept="image/*" multiple hidden>
+  <input type="file" id="fileJSON" accept=".json,application/json" hidden>
+  <noscript>My Whiteboard needs JavaScript.</noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
