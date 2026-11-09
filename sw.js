@@ -1,13 +1,13 @@
 // Service worker: makes the whole app available offline (app shell precache)
 // and caches pictures from other websites so boards still show them offline.
 // Bump VERSION whenever you change any app file, so devices pick up the update.
-const VERSION = 'v1.0.3';
+const VERSION = 'v1.0.4';
 const SHELL = `wb-shell-${VERSION}`;
 const IMG = 'wb-img-v1';
 const FILES = [
   './', './index.html', './config.js', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/render.js', './js/sync.js', './js/drive.js', './js/mockdrive.js',
-  './js/export.js', './js/templates.js', './js/ui.js',
+  './js/export.js', './js/templates.js', './js/ui.js', './js/ink.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
 ];
 

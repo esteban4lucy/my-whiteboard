@@ -32,7 +32,7 @@ export const BUILTIN_TEMPLATES = [
     id: 'tpl-meeting-notes', name: 'Meeting Notes', background: 'grid', builtin: true,
     items: [
       text(0, -120, 'Meeting: <title>', 40),
-      text(0, -66, 'Date: __ / __ / ____    Attendees: …', 22),
+      text(0, -66, 'Date: {{date}}    Attendees: …', 22),
       ...column(0, 0, 'Agenda', 300, 600, B, ['1. …', '2. …', '3. …']),
       ...column(330, 0, 'Notes', 300, 600, Y, ['Key point…', 'Key point…']),
       ...column(660, 0, 'Decisions', 300, 600, G, ['Decided…']),
@@ -84,7 +84,7 @@ export const BUILTIN_TEMPLATES = [
   {
     id: 'tpl-weekly-review', name: 'Weekly Review', background: 'grid', builtin: true,
     items: [
-      text(0, -110, 'Weekly Review – week __', 40),
+      text(0, -110, 'Weekly Review – {{date}}', 40),
       text(0, -60, 'Energy: ☐☐☐☐☐   Focus: ☐☐☐☐☐', 22),
       ...column(0, 0, 'Wins 🎉', 300, 420, G, ['…', '…']),
       ...column(320, 0, 'Challenges', 300, 420, P, ['…', '…']),

@@ -3,6 +3,7 @@
 import { db, kv, uid } from './db.js';
 import * as R from './render.js';
 import { BUILTIN_TEMPLATES } from './templates.js';
+import { smooth as inkSmooth, recognize } from './ink.js';
 import { createSync } from './sync.js';
 import { GoogleDriveAdapter } from './drive.js';
 import { exportPNG, exportPDF, exportJSON } from './export.js';
@@ -149,7 +150,8 @@ const byId = (id) => (S.board ? S.board.items.find((i) => i.id === id) : null);
 const isLocked = (it) => !!it.locked || (it.layer === 'bg' && !!(S.board && S.board.bgLocked));
 // Per-device arrange preferences.
 const GRID = 20;
-const PREF = { grid: localStorage.getItem('wb-snap-grid') === '1', cols: localStorage.getItem('wb-snap-cols') !== '0', map: localStorage.getItem('wb-minimap') === '1' };
+const PREF = { grid: localStorage.getItem('wb-snap-grid') === '1', cols: localStorage.getItem('wb-snap-cols') !== '0', map: localStorage.getItem('wb-minimap') === '1', smooth: localStorage.getItem('wb-smooth') !== '0', shapes: localStorage.getItem('wb-shapes') === '1' };
+function setPref(k, v, key) { PREF[k] = v; localStorage.setItem(key, v ? '1' : '0'); }
 const snapV = (v) => (PREF.grid ? Math.round(v / GRID) * GRID : v);
 const CONN_TYPES = ['line', 'arrow'];
 const attachAt = (w, exclude = null) => topHit(w, (x) => !CONN_TYPES.includes(x.type) && x.type !== 'stroke' && x !== exclude, true);
@@ -189,12 +191,45 @@ async function refreshPending() {
   renderSyncPill();
 }
 
-function newBoardFrom(tpl, name) {
+const fmtDateLong = (d = new Date()) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+function applyRep(str, rep) { let out = String(str ?? ''); for (const [k, v] of Object.entries(rep || {})) out = out.split(k).join(String(v)); return out; }
+// Placeholders in templates: {{date}} becomes today's date (e.g. "16 Nov 2026") unless replaced otherwise.
+function newBoardFrom(tpl, name, rep = null) {
+  rep = { '{{date}}': fmtDateLong(), ...(rep || {}) };
   const fresh = JSON.parse(JSON.stringify(tpl.items || []));
+  for (const it of fresh) {
+    if (typeof it.text === 'string') it.text = applyRep(it.text, rep);
+    if (typeof it.title === 'string') it.title = applyRep(it.title, rep);
+  }
   const gmap = new Map(), idmap = new Map(fresh.map((i) => [i.id, uid('i-')]));
   for (const it of fresh) { it.id = idmap.get(it.id); for (const k of ['from', 'to']) if (it[k]) { if (idmap.has(it[k])) it[k] = idmap.get(it[k]); else delete it[k]; } if (it.groupId) { if (!gmap.has(it.groupId)) gmap.set(it.groupId, uid('g-')); it.groupId = gmap.get(it.groupId); } }
   const now = Date.now();
-  return { id: uid('b-'), name: name || tpl.name, background: tpl.background || 'grid', ...(tpl.bgLocked ? { bgLocked: true } : {}), items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
+  return { id: uid('b-'), name: applyRep(name || tpl.name, rep), background: tpl.background || 'grid', ...(tpl.bgLocked ? { bgLocked: true } : {}), items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
+}
+// Drive inbox: a {"type":"new-board", ...} JSON file in Whiteboard/inbox becomes a board (see README).
+async function makeInboxBoard(d, boardId) {
+  const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
+  const tpls = await allTemplates();
+  const key = String(d.template || 'Blank').trim().toLowerCase();
+  const tpl = tpls.find((t) => t.id.toLowerCase() === key || t.name.toLowerCase() === key || t.id === 'tpl-' + key.replace(/\s+/g, '-'));
+  if (!tpl) fail(`unknown template “${d.template}” (use one of: ${tpls.map((t) => t.name).join(', ')})`);
+  if (d.replace && typeof d.replace !== 'object') fail('“replace” must be an object like {"{{date}}": "16 Nov 2026"}');
+  const b = newBoardFrom(tpl, String(d.name).slice(0, 200), d.replace);
+  b.id = boardId; b.inboxFile = true;
+  const notes = Array.isArray(d.notes) ? d.notes.slice(0, 200) : [];
+  if (notes.length) {
+    const bb = b.items.length ? R.boardBounds(b.items) : { x: 0, y: -60, w: 0, h: 0 };
+    notes.forEach((n, i) => {
+      const o = typeof n === 'string' ? { text: n } : (n || {});
+      const it = { id: uid('i-'), type: 'note', x: bb.x + (i % 4) * 240, y: bb.y + bb.h + 60 + Math.floor(i / 4) * 200, w: 220, h: 170, text: applyRep(o.text || '', { '{{date}}': fmtDateLong(), ...(d.replace || {}) }), color: /^#[0-9a-f]{6}$/i.test(o.color || '') ? o.color : R.NOTE_COLORS[0], fontSize: 20 };
+      if (Array.isArray(o.tags) && o.tags.length) it.tags = o.tags.map(String).slice(0, 8);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(o.due || '')) it.due = o.due;
+      b.items.push(it);
+    });
+  }
+  if (d.pinned) b.pinned = true;
+  if (Array.isArray(d.tags) && d.tags.length) b.tags = d.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8);
+  return b;
 }
 async function createBoard(tpl, name) {
   const b = newBoardFrom(tpl, name);
@@ -407,7 +442,7 @@ function endPointer(e) {
   const g = G; G = null;
   if (g.lp) clearTimeout(g.lp);
   switch (g.type) {
-    case 'draw': if (g.draft.points.length) commit(() => S.board.items.push(g.draft)); break;
+    case 'draw': if (g.draft.points.length) finishStroke(g.draft); break;
     case 'shape': {
       const d = g.draft;
       if (CONN_TYPES.includes(d.type)) { const b = attachAt({ x: d.x2, y: d.y2 }); if (b && b.id !== d.from) d.to = b.id; }
@@ -467,6 +502,132 @@ canvas.addEventListener('wheel', (e) => {
 function eraseAt(w) {
   const victim = topHit(w, (it) => ['stroke', 'rect', 'ellipse', 'line', 'arrow'].includes(it.type)); // locked items are never erased
   if (victim) { S.board.items = S.board.items.filter((i) => i !== victim); G.removed++; requestRender(); }
+}
+
+// ---------- handwriting: smoothing + shape recognition ----------
+const SHAPE_NAMES = { rect: 'rectangle', ellipse: 'circle/ellipse', line: 'line', arrow: 'arrow' };
+function finishStroke(d) {
+  if (PREF.smooth && d.points.length >= 5) d.points = inkSmooth(d.points, S.view.scale);
+  commit(() => S.board.items.push(d));
+  if (!PREF.shapes || d.tool !== 'pen') return;
+  const r = recognize(d.points, 50 / S.view.scale); if (!r) return;
+  const sh = { id: uid('i-'), type: r.type, x1: r1(snapV(r.x1)), y1: r1(snapV(r.y1)), x2: r1(snapV(r.x2)), y2: r1(snapV(r.y2)), color: d.color, size: Math.max(2, d.size) };
+  commit(() => { const i = S.board.items.indexOf(d); if (i >= 0) S.board.items[i] = sh; }); // separate step: Undo brings the hand-drawn stroke back
+  toast(`Recognised a ${SHAPE_NAMES[r.type]} – Undo keeps your drawing.`, { ms: 2500 });
+}
+function penMenu(anchor) {
+  const item = (label, fn) => h('button', { class: 'menu-item', onclick: () => { closePopover(); fn(); } }, label);
+  popover(anchor, h('div', { class: 'menu' }, h('div', { class: 'pop-title' }, 'Pen'),
+    item(`Smooth handwriting: ${PREF.smooth ? 'on' : 'off'}`, () => { setPref('smooth', !PREF.smooth, 'wb-smooth'); toast(`Smooth handwriting ${PREF.smooth ? 'on' : 'off'}.`, { ms: 1500 }); }),
+    item(`Shape recognition: ${PREF.shapes ? 'on' : 'off'}`, () => { setPref('shapes', !PREF.shapes, 'wb-shapes'); toast(PREF.shapes ? 'Shape recognition on: rough boxes, circles, lines and arrows become clean shapes.' : 'Shape recognition off.', { ms: 2500 }); }),
+    h('p', { class: 'muted small', style: 'margin:4px 12px;max-width:250px' }, 'Shape recognition: draw a box, circle, straight line or arrow in one stroke. Undo right after keeps the hand-drawn version.')));
+}
+
+// ---------- copy / paste across boards ----------
+const CLIP_KEY = 'wb-clip';
+function readClip() { try { const c = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); return c && Array.isArray(c.items) && c.items.length ? c : null; } catch { return null; } }
+function clipSig(items) {
+  const t = items.map((i) => (i.type === 'note' || i.type === 'text' ? i.text : i.type === 'link' ? i.url : i.type === 'frame' ? i.title : '')).filter((x) => x && x.trim()).join('\n\n');
+  return t || `[My Whiteboard: ${items.length} item${items.length === 1 ? '' : 's'}]`;
+}
+// Selected items plus everything inside selected frames.
+function selWithContents() {
+  const items = selItems(), ids = new Set(items.map((i) => i.id));
+  for (const f of items.filter((i) => i.type === 'frame')) for (const c of R.frameContents(S.board.items, f)) ids.add(c.id);
+  return S.board.items.filter((i) => ids.has(i.id));
+}
+// Fresh copies with new ids; groups and connectors are re-wired among the copies; copies are unlocked.
+function cloneItems(items, dx, dy) {
+  const idmap = new Map(items.map((i) => [i.id, uid('i-')])), gmap = new Map();
+  return items.map((it) => {
+    const c = JSON.parse(JSON.stringify(it)); c.id = idmap.get(it.id); delete c.locked;
+    for (const k of ['from', 'to']) if (c[k]) { if (idmap.has(c[k])) c[k] = idmap.get(c[k]); else delete c[k]; }
+    if (c.groupId) { if (!gmap.has(c.groupId)) gmap.set(c.groupId, uid('g-')); c.groupId = gmap.get(c.groupId); }
+    R.moveItem(c, dx, dy); return c;
+  });
+}
+async function copySelected(cut = false) {
+  const items = selWithContents(); if (!items.length) return;
+  const sig = clipSig(items);
+  localStorage.setItem(CLIP_KEY, JSON.stringify({ items, sig, from: S.board.name, at: Date.now() }));
+  try { await navigator.clipboard.writeText(sig); } catch { /* clipboard permission not granted: the in-app clipboard still works */ }
+  if (cut) { const del = new Set(items.filter((i) => !isLocked(i)).map((i) => i.id)); commit(() => { S.board.items = S.board.items.filter((i) => !del.has(i.id)); }); setSel([]); }
+  toast(`${cut ? 'Cut' : 'Copied'} ${items.length} item${items.length === 1 ? '' : 's'} – paste on any board with Ctrl+V or + › Paste.`, { ms: 2500 });
+}
+function pasteClip(at) {
+  const c = readClip(); if (!c) { toast('Nothing copied yet: select items › Copy.'); return false; }
+  const b = R.boardBounds(c.items), ctr = at || viewCenter();
+  const copies = cloneItems(c.items, snapV(ctr.x - (b.x + b.w / 2)), snapV(ctr.y - (b.y + b.h / 2)));
+  commit(() => S.board.items.push(...copies)); setTool('select'); setSel(copies.map((i) => i.id)); return true;
+}
+// + › Paste (phone friendly): a copied picture from the system clipboard first, then copied board items, then text/links.
+async function pasteFromMenu() {
+  const c = readClip();
+  try {
+    if (navigator.clipboard && navigator.clipboard.read) {
+      for (const ci of await navigator.clipboard.read()) {
+        const type = ci.types.find((t) => t.startsWith('image/'));
+        if (type) { const blob = await ci.getType(type); await insertImageFile(new File([blob], 'pasted.' + type.split('/')[1], { type })); return; }
+      }
+    }
+  } catch { /* no permission / not supported */ }
+  let t = '';
+  try { t = ((await navigator.clipboard.readText()) || '').trim(); } catch { /* ignore */ }
+  if (c && (!t || t === c.sig.trim())) return pasteClip();
+  if (t) return pasteText(t);
+  if (c) return pasteClip();
+  toast('Clipboard is empty (or the browser blocked access). Copy something first.');
+}
+function pasteText(t) {
+  if (/^https?:\/\/\S+$/i.test(t)) { if (/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(t)) addImageFromUrl(t); else addLink(t); }
+  else { const c = viewCenter(); const it = { id: uid('i-'), type: 'note', x: c.x - 100, y: c.y - 80, w: 220, h: 170, text: t, color: S.noteColor, fontSize: 20 }; commit(() => S.board.items.push(it)); setTool('select'); setSel([it.id]); }
+}
+async function copyToBoardDialog() {
+  const items = selWithContents(); if (!items.length) return;
+  await refreshPending();
+  const others = S.boards.filter((b) => b.id !== S.board.id);
+  if (!others.length) return toast('Create another board first (☰ › + New board).');
+  const list = h('div', { class: 'results' }, ...others.map((b) => h('button', { class: 'result', 'data-board': b.id, onclick: async () => { closeModal(null); await copyItemsToBoard(items, b); } }, h('strong', {}, b.name), h('small', {}, `${b.items.length} items`))));
+  openModal('Copy to another board', h('div', { class: 'stack' }, h('p', { class: 'muted small' }, `${items.length} item${items.length === 1 ? '' : 's'} will be copied below that board's content. This board is not changed.`), list), { wide: true });
+}
+async function copyItemsToBoard(items, target) {
+  await saveChain;
+  await db.update('boards', target.id, (cur) => {
+    if (!cur) return undefined;
+    const tb = cur.items.length ? R.boardBounds(cur.items) : { x: 0, y: -80, w: 0, h: 0 }, b = R.boardBounds(items);
+    cur.items.push(...cloneItems(items, Math.round(tb.x - b.x), Math.round(tb.y + tb.h + 80 - b.y)));
+    cur.updatedAt = Date.now(); cur.dirty = true; return cur;
+  });
+  await refreshPending(); renderDrawer(); sync && sync.schedule();
+  toast(`Copied ${items.length} item${items.length === 1 ? '' : 's'} to “${target.name}”.`, { ms: 5000, action: 'Open', onAction: () => openBoard(target.id) });
+}
+
+// ---------- phone: camera + dictated sticky note ----------
+function dictateNote() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const ta = h('textarea', { class: 'dict-text', rows: 4, placeholder: SR ? 'Listening… speak now' : 'Tap the microphone on your keyboard and speak, or type.' });
+  const status = h('p', { class: 'muted small dict-status' }, SR ? '🎤 Listening… (needs an internet connection on most phones)' : 'Voice typing is not built into this browser – use the microphone key on your phone keyboard.');
+  let rec = null, base = '';
+  const stop = () => { if (rec) { try { rec.stop(); } catch { /* already stopped */ } } };
+  const start = () => {
+    if (!SR) return;
+    try {
+      rec = new SR(); rec.lang = navigator.language || 'en-GB'; rec.interimResults = true; rec.continuous = true;
+      base = ta.value ? ta.value.replace(/\s*$/, ' ') : '';
+      rec.onresult = (e) => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; ta.value = base + t; };
+      rec.onerror = (e) => { status.textContent = e.error === 'not-allowed' || e.error === 'service-not-allowed' ? 'Microphone blocked – allow it in the browser, or type / use the keyboard microphone.' : e.error === 'network' ? 'Voice typing needs a connection – type or use the keyboard microphone instead.' : `Voice input stopped (${e.error}). You can type instead.`; };
+      rec.onend = () => { if (!/blocked|needs|stopped/.test(status.textContent)) status.textContent = 'Stopped. Edit the text if needed, then Create note.'; micBtn.textContent = '🎤 Listen again'; };
+      rec.start(); status.textContent = '🎤 Listening…'; micBtn.textContent = '■ Stop';
+    } catch (e) { status.textContent = 'Voice input unavailable: ' + e.message; }
+  };
+  const micBtn = h('button', { class: 'btn', type: 'button', onclick: () => { if (micBtn.textContent.startsWith('■')) stop(); else start(); } }, '■ Stop');
+  const create = h('button', { class: 'btn primary dict-create', type: 'button', onclick: () => {
+    stop(); const t = ta.value.trim(); closeModal(null); if (!t) return;
+    const c = viewCenter(); const it = { id: uid('i-'), type: 'note', x: snapV(c.x - 110), y: snapV(c.y - 85), w: 220, h: 170, text: t, color: S.noteColor, fontSize: 20 };
+    commit(() => S.board.items.push(it)); setTool('select'); setSel([it.id]);
+  } }, 'Create note');
+  openModal('Dictate a sticky note', h('div', { class: 'stack' }, ta, status, h('div', { class: 'row end' }, SR ? micBtn : null, create))).then(stop);
+  if (SR) start(); else setTimeout(() => ta.focus(), 50);
 }
 
 // ---------- move helpers: frames carry their contents, connectors detach, Kanban column snapping ----------
@@ -665,6 +826,7 @@ function buildToolbar() {
       if (t === 'shape' && S.tool === 'shape') return shapeMenu(b);
       if (t === 'note' && S.tool === 'note') return noteColorMenu(b);
       if (t === 'select' && S.tool === 'select') return selectMenu(b);
+      if (t === 'pen' && S.tool === 'pen') return penMenu(b);
       setTool(t);
       if (t === 'shape' && !localStorage.getItem('wb-shape-hint')) { localStorage.setItem('wb-shape-hint', '1'); shapeMenu(b); }
     });
@@ -686,6 +848,7 @@ function selectMenu(anchor) {
   popover(anchor, h('div', { class: 'menu' },
     item('multi', S.multiMode ? 'Stop multi-select' : 'Multi-select (tap items to add)', () => setMultiMode(!S.multiMode)),
     item('select', 'Select all', selectAll),
+    readClip() ? item('copy', `Paste (${readClip().items.length} copied item${readClip().items.length === 1 ? '' : 's'})`, () => pasteClip()) : null,
     item('unlock', `Unlock all${nLocked ? ` (${nLocked} locked)` : ''}`, unlockAll)));
 }
 function shapeMenu(anchor) {
@@ -696,7 +859,7 @@ function shapeMenu(anchor) {
 function noteColorMenu(anchor) {
   const wrap = h('div', { class: 'pop-row' });
   for (const c of R.NOTE_COLORS) wrap.append(h('button', { class: 'chip' + (S.noteColor === c ? ' active' : ''), style: `background:${c}`, 'aria-label': 'Note colour ' + c, onclick: () => { S.noteColor = c; closePopover(); } }));
-  popover(anchor, h('div', {}, h('div', { class: 'pop-title' }, 'New note colour'), wrap));
+  popover(anchor, h('div', {}, h('div', { class: 'pop-title' }, 'New note colour'), wrap, h('button', { class: 'menu-item', onclick: () => { closePopover(); dictateNote(); } }, '🎤 Dictate a note')));
 }
 function colorMenu(anchor) {
   const colors = h('div', { class: 'pop-row wrap' });
@@ -708,7 +871,10 @@ function colorMenu(anchor) {
 function insertMenu(anchor) {
   const item = (icon, label, fn) => h('button', { class: 'menu-item', onclick: () => { closePopover(); fn(); } }, h('span', { html: ICONS[icon] }), label);
   popover(anchor, h('div', { class: 'menu' },
+    item('image', 'Take a photo', () => $('#fileCamera').click()),
     item('image', 'Upload picture (saved to Drive)', () => $('#fileImage').click()),
+    item('copy', 'Paste (copied items, picture or text)', pasteFromMenu),
+    item('note', '🎤 Dictate a sticky note', dictateNote),
     item('link', 'Picture from URL', insertImageUrl),
     item('open', 'Link a document or web page', insertLinkDialog),
     item('frame', 'Frame / section', insertFrame),
@@ -874,6 +1040,7 @@ function showCtxBar() {
   if (items.some((i) => i.groupId)) btn('ungroup', 'Ungroup', ungroupSelected);
   btn('lock', 'Lock (stays put)', () => setLock(true));
   btn('copy', 'Duplicate', duplicateSelected);
+  btn('clip', 'Copy, cut or send to another board', (e) => clipMenu(e.currentTarget));
   btn('layers', 'Layers: front / back / background', (e) => layersMenu(e.currentTarget));
   btn('trash', 'Delete', deleteSelected);
   bar.querySelector('[data-act=multi]').classList.toggle('active', S.multiMode);
@@ -884,24 +1051,26 @@ function positionCtxBar() {
   const b = R.boardBounds(items), p = toScreen({ x: b.x + b.w / 2, y: b.y });
   const bw = bar.offsetWidth;
   if (S.multiMode) { // docked above the toolbar so it never covers items you are tapping
-    const tb = $('.toolbar').getBoundingClientRect();
+    const tops = ['.toolbar', '.history', '.zoom'].map((q) => $(q)).map((e) => e && e.getBoundingClientRect()).filter((r) => r && r.height > 0).map((r) => r.top);
+    const tb = { top: tops.length ? Math.min(...tops) : H };
     bar.style.left = Math.max(8, (W - bw) / 2) + 'px'; bar.style.top = Math.max(64, tb.top - bar.offsetHeight - 10) + 'px'; return;
   }
   const top = Math.max(64, p.y - bar.offsetHeight - 16);
   bar.style.left = Math.min(Math.max(8, p.x - bw / 2), W - bw - 8) + 'px'; bar.style.top = Math.min(top, H - 160) + 'px';
+}
+function clipMenu(anchor) {
+  const n = selWithContents().filter((i) => !i.locked).length;
+  popover(anchor, h('div', { class: 'menu', role: 'menu' },
+    h('button', { class: 'menu-item', 'data-clip': 'copy', onclick: () => { closePopover(); copySelected(false); }, html: `${ICONS.clip}<span>Copy ${n} item${n === 1 ? '' : 's'} (paste on any board)</span>` }),
+    h('button', { class: 'menu-item', 'data-clip': 'cut', onclick: () => { closePopover(); copySelected(true); }, html: `${ICONS.trash}<span>Cut</span>` }),
+    h('button', { class: 'menu-item', 'data-clip': 'send', onclick: () => { closePopover(); copyToBoardDialog(); }, html: `${ICONS.send}<span>Copy to another board…</span>` })), { place: 'below' });
 }
 function deleteSelected() {
   const ids = new Set(selItems().filter((i) => !isLocked(i)).map((i) => i.id)); if (!ids.size) return;
   commit(() => { S.board.items = S.board.items.filter((i) => !ids.has(i.id)); }); setSel([]);
 }
 function duplicateSelected() {
-  const gmap = new Map(), idmap = new Map(selItems().map((i) => [i.id, uid('i-')]));
-  const copies = selItems().map((it) => {
-    const c = JSON.parse(JSON.stringify(it)); c.id = idmap.get(it.id); delete c.locked;
-    for (const k of ['from', 'to']) if (c[k]) { if (idmap.has(c[k])) c[k] = idmap.get(c[k]); else delete c[k]; }
-    if (c.groupId) { if (!gmap.has(c.groupId)) gmap.set(c.groupId, uid('g-')); c.groupId = gmap.get(c.groupId); }
-    R.moveItem(c, 24, 24); return c;
-  });
+  const copies = cloneItems(selWithContents(), 24, 24);
   commit(() => S.board.items.push(...copies)); setSel(copies.map((c) => c.id));
 }
 function reorder(toFront) {
@@ -1048,20 +1217,60 @@ function formatMenu(anchor) {
 }
 
 // ---------- boards drawer ----------
+const drawerFilter = { q: '', tag: '' };
 function renderDrawer() {
   const list = $('#boardList'); if (!list) return;
   list.innerHTML = '';
-  for (const b of S.boards) {
-    const row = h('div', { class: 'board-row' + (S.board && b.id === S.board.id ? ' current' : '') },
-      h('button', { class: 'board-open', onclick: () => { openBoard(b.id); toggleDrawer(false); } }, h('strong', {}, b.name), h('small', {}, `${b.items.length} items · ${fmtTime(b.updatedAt)}${b.dirty ? ' · not yet synced' : ''}`)),
+  const boards = S.boards.map((b) => (S.board && b.id === S.board.id ? { ...b, items: S.board.items, name: S.board.name, pinned: S.board.pinned, tags: S.board.tags } : b));
+  const allTags = [...new Set(boards.flatMap((b) => b.tags || []))].sort((a, b) => a.localeCompare(b));
+  const chips = $('#boardTags'); chips.innerHTML = '';
+  const chip = (val, label) => chips.append(h('button', { class: 'tag-chip' + (drawerFilter.tag === val ? ' active' : ''), 'data-tag': val, onclick: () => { drawerFilter.tag = drawerFilter.tag === val ? '' : val; renderDrawer(); } }, label));
+  if (boards.some((b) => b.pinned) || allTags.length) { chip('', 'All'); chip('★', '★ Pinned'); allTags.forEach((t) => chip(t, '#' + t)); }
+  const q = drawerFilter.q.trim().toLowerCase();
+  const shown = boards.filter((b) => (!q || b.name.toLowerCase().includes(q) || (b.tags || []).some((t) => t.toLowerCase().includes(q)))
+    && (!drawerFilter.tag || (drawerFilter.tag === '★' ? b.pinned : (b.tags || []).includes(drawerFilter.tag))));
+  const pinned = shown.filter((b) => b.pinned), rest = shown.filter((b) => !b.pinned);
+  const row = (b) => {
+    const c = h('canvas', { class: 'board-thumb', width: 144, height: 96, 'aria-hidden': 'true' });
+    const r = h('div', { class: 'board-row' + (S.board && b.id === S.board.id ? ' current' : ''), 'data-board': b.id },
+      h('button', { class: 'board-open', onclick: () => { openBoard(b.id); toggleDrawer(false); } }, c,
+        h('span', { class: 'board-info' }, h('strong', {}, b.name), h('small', {}, `${b.items.length} item${b.items.length === 1 ? '' : 's'} · ${fmtTime(b.updatedAt)}${b.dirty ? ' · not yet synced' : ''}`),
+          (b.tags || []).length ? h('span', { class: 'board-tags' }, ...(b.tags || []).map((t) => h('span', { class: 'mini-tag' }, '#' + t))) : null)),
+      h('button', { class: 'tool sm pin' + (b.pinned ? ' on' : ''), title: b.pinned ? 'Unpin' : 'Pin to top', 'aria-label': `${b.pinned ? 'Unpin' : 'Pin'} ${b.name}`, 'aria-pressed': String(!!b.pinned), onclick: () => setBoardMeta(b.id, { pinned: b.pinned ? undefined : true }) }, b.pinned ? '★' : '☆'),
       h('button', { class: 'tool sm', title: 'Board actions', 'aria-label': `Actions for ${b.name}`, html: ICONS.more, onclick: (e) => boardMenu(e.currentTarget, b) }));
-    list.append(row);
-  }
+    requestAnimationFrame(() => boardThumb(c, b));
+    return r;
+  };
+  if (pinned.length) { list.append(h('div', { class: 'list-head' }, '★ Pinned')); pinned.forEach((b) => list.append(row(b))); if (rest.length) list.append(h('div', { class: 'list-head' }, 'Boards')); }
+  rest.forEach((b) => list.append(row(b)));
+  if (!shown.length) list.append(h('p', { class: 'muted small', style: 'padding:8px' }, 'No boards match.'));
+}
+function boardThumb(c, b) {
+  const x = c.getContext('2d'), w = c.width, hh = c.height;
+  const items = b.items || [];
+  const bb = items.length ? R.boardBounds(items) : { x: -100, y: -60, w: 200, h: 120 };
+  const s = Math.min((w - 8) / Math.max(bb.w, 1), (hh - 8) / Math.max(bb.h, 1), 1);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  R.drawBoard(x, { ...b, background: 'solid', items }, { x: w / 2 - (bb.x + bb.w / 2) * s, y: hh / 2 - (bb.y + bb.h / 2) * s, scale: s }, w, hh, { ...env(), editingId: null });
+}
+async function setBoardMeta(id, patch) {
+  const applyP = (o) => { for (const [k, v] of Object.entries(patch)) { if (v === undefined || (Array.isArray(v) && !v.length)) delete o[k]; else o[k] = v; } };
+  if (S.board && S.board.id === id) { applyP(S.board); await save(); }
+  else { await db.update('boards', id, (cur) => { if (!cur) return undefined; applyP(cur); cur.updatedAt = Date.now(); cur.dirty = true; return cur; }); sync && sync.schedule(); }
+  await refreshPending(); renderDrawer();
+}
+async function editBoardTags(b) {
+  const v = await ask('Board tags', [{ name: 'tags', label: 'Tags, comma separated (e.g. work, personal, weekly)', value: (b.tags || []).join(', ') }], { ok: 'Save' });
+  if (!v) return;
+  const tags = [...new Set(v.tags.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean))].slice(0, 8);
+  await setBoardMeta(b.id, { tags });
 }
 function boardMenu(anchor, b) {
   const item = (icon, label, fn) => h('button', { class: 'menu-item', onclick: () => { closePopover(); fn(); } }, h('span', { html: ICONS[icon] }), label);
   popover(anchor, h('div', { class: 'menu' },
     item('edit', 'Rename', () => renameBoard(b.id)),
+    item('lock', b.pinned ? 'Unpin' : 'Pin to top', () => setBoardMeta(b.id, { pinned: b.pinned ? undefined : true })),
+    item('tag', 'Tags…', () => editBoardTags(b)),
     item('copy', 'Duplicate', () => duplicateBoard(b.id)),
     item('note', 'Save as template', () => saveAsTemplate(b.id)),
     item('trash', 'Delete', () => deleteBoard(b.id))), { place: 'below' });
@@ -1236,6 +1445,8 @@ function moreMenu(anchor) {
     item('grid', `Snap to grid: ${PREF.grid ? 'on' : 'off'}`, () => { PREF.grid = !PREF.grid; localStorage.setItem('wb-snap-grid', PREF.grid ? '1' : '0'); toast(`Snap to grid ${PREF.grid ? 'on' : 'off'}.`, { ms: 1500 }); }),
     item('note', `Snap notes into columns: ${PREF.cols ? 'on' : 'off'}`, () => { PREF.cols = !PREF.cols; localStorage.setItem('wb-snap-cols', PREF.cols ? '1' : '0'); toast(`Snap notes into columns ${PREF.cols ? 'on' : 'off'}.`, { ms: 1500 }); }),
     item('lock', S.board.bgLocked ? 'Unlock background layer' : 'Lock background layer', () => setBgLocked(!S.board.bgLocked)),
+    item('pen', `Smooth handwriting: ${PREF.smooth ? 'on' : 'off'}`, () => setPref('smooth', !PREF.smooth, 'wb-smooth')),
+    item('rect', `Shape recognition: ${PREF.shapes ? 'on' : 'off'}`, () => setPref('shapes', !PREF.shapes, 'wb-shapes')),
     h('div', { class: 'pop-title' }, 'Background'), bgRow,
     h('div', { class: 'pop-title' }, 'Export'),
     item('image', 'Export as PNG image', () => doExport('png')),
@@ -1260,7 +1471,7 @@ async function helpDialog() {
     `Changes waiting to sync: ${S.pending}`,
   ];
   openModal('Offline status & help', h('div', { class: 'stack' }, ...lines.map((l) => h('p', {}, l)),
-    h('p', { class: 'muted small' }, 'Tips: two fingers pan & zoom on touch. With the Select tool, drag empty space to pan; double-tap a note to edit it. Keyboard: V select, P pen, H highlighter, E eraser, S shapes, T text, N note, Ctrl+Z / Ctrl+Shift+Z, Delete removes the selection, Space+drag pans. Shift-click or Shift+drag (box) selects several; Ctrl+A all, Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+L lock/unlock, Ctrl+B bold, Ctrl+I italic. Long-press a locked item to select it, then Unlock. Paste a picture or link straight onto the board. Arrows drawn from one item to another stay attached. Ctrl+] / Ctrl+[ forward / backward (add Shift for front / back). Present mode: arrow keys or swipe, Esc to leave.'),
+    h('p', { class: 'muted small' }, 'Tips: two fingers pan & zoom on touch. With the Select tool, drag empty space to pan; double-tap a note to edit it. Keyboard: V select, P pen, H highlighter, E eraser, S shapes, T text, N note, Ctrl+Z / Ctrl+Shift+Z, Delete removes the selection, Space+drag pans. Shift-click or Shift+drag (box) selects several; Ctrl+A all, Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+L lock/unlock, Ctrl+B bold, Ctrl+I italic. Long-press a locked item to select it, then Unlock. Paste a picture or link straight onto the board. Arrows drawn from one item to another stay attached. Ctrl+] / Ctrl+[ forward / backward (add Shift for front / back). Present mode: arrow keys or swipe, Esc to leave. Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste items between boards; Ctrl+D duplicates.'),
     h('div', { class: 'row end' }, h('button', { class: 'btn primary', onclick: () => { closeModal(); manualSync(); } }, 'Sync now'))));
 }
 
@@ -1316,7 +1527,7 @@ function signInGate() {
 
 // ---------- keyboard, paste, drop ----------
 document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, textarea, [contenteditable]')) return;
+  if (e.target.matches && e.target.matches('input, textarea, [contenteditable]')) return;
   if (P.on) {
     if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); goSlide(P.i + 1); }
     else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); goSlide(P.i - 1); }
@@ -1329,6 +1540,8 @@ document.addEventListener('keydown', (e) => {
   if (mod && k === 'y') { e.preventDefault(); redo(); return; }
   if (mod && k === 'f') { e.preventDefault(); searchDialog(); return; }
   if (mod && k === 'a') { e.preventDefault(); selectAll(); return; }
+  if (mod && (k === 'c' || k === 'x') && S.sel.length && !window.getSelection().toString()) { e.preventDefault(); copySelected(k === 'x'); return; }
+  if (mod && k === 'd' && S.sel.length) { e.preventDefault(); duplicateSelected(); return; }
   if (mod && k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSelected() : groupSelected(); return; }
   if (mod && k === 'l') { e.preventDefault(); if (S.sel.length) setLock(!selItems().every(isLocked)); return; }
   if (mod && (k === 'b' || k === 'i') && S.sel.length) {
@@ -1347,13 +1560,13 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keyup', (e) => { if (e.key === ' ') { spaceDown = false; canvas.dataset.mode = S.tool; } });
 document.addEventListener('paste', async (e) => {
-  if (e.target.matches('input, textarea')) return;
+  if (e.target.matches && e.target.matches('input, textarea')) return;
   const files = [...(e.clipboardData.files || [])].filter((f) => /^image\//.test(f.type));
   if (files.length) { e.preventDefault(); for (const f of files) await insertImageFile(f); return; }
-  const t = (e.clipboardData.getData('text') || '').trim(); if (!t) return;
-  e.preventDefault();
-  if (/^https?:\/\/\S+$/i.test(t)) { if (/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(t)) addImageFromUrl(t); else addLink(t); }
-  else { const c = viewCenter(); const it = { id: uid('i-'), type: 'note', x: c.x - 100, y: c.y - 80, w: 220, h: 170, text: t, color: S.noteColor, fontSize: 20 }; commit(() => S.board.items.push(it)); }
+  const t = (e.clipboardData.getData('text') || '').trim(), c = readClip();
+  if (c && (!t || t === c.sig.trim())) { e.preventDefault(); pasteClip(); return; } // items copied in My Whiteboard (any board)
+  if (!t) return;
+  e.preventDefault(); pasteText(t);
 });
 canvas.addEventListener('dragover', (e) => e.preventDefault());
 canvas.addEventListener('drop', async (e) => {
@@ -1369,7 +1582,8 @@ async function boot() {
   $('#btnBoards').innerHTML = ICONS.menu; $('#btnSearch').innerHTML = ICONS.search; $('#btnTheme').innerHTML = ICONS.theme; $('#btnMore').innerHTML = ICONS.more;
   $('#btnUndo').innerHTML = ICONS.undo; $('#btnRedo').innerHTML = ICONS.redo; $('#zoomOut').innerHTML = ICONS.minus; $('#zoomIn').innerHTML = ICONS.plus; $('#zoomFit').innerHTML = ICONS.fit;
   $('#btnBoards').onclick = () => toggleDrawer(); $('#drawerClose').onclick = () => toggleDrawer(false); $('#drawerScrim').onclick = () => toggleDrawer(false);
-  $('#btnNewBoard').onclick = newBoardDialog; $('#boardName').onclick = () => renameBoard(S.board.id);
+  $('#btnNewBoard').onclick = newBoardDialog;
+  $('#boardSearch').addEventListener('input', (e) => { drawerFilter.q = e.target.value; renderDrawer(); }); $('#boardName').onclick = () => renameBoard(S.board.id);
   $('#btnSearch').onclick = searchDialog; $('#btnTheme').onclick = toggleTheme; $('#btnMore').onclick = (e) => moreMenu(e.currentTarget);
   $('#btnUndo').onclick = undo; $('#btnRedo').onclick = redo;
   $('#zoomIn').onclick = () => zoomAt(1.25, { x: W / 2, y: H / 2 }); $('#zoomOut').onclick = () => zoomAt(0.8, { x: W / 2, y: H / 2 }); $('#zoomFit').onclick = fitView;
@@ -1378,6 +1592,7 @@ async function boot() {
   $('#multiDone').onclick = () => setMultiMode(false);
   $('#modalClose').onclick = () => closeModal(null); $('#modal').addEventListener('pointerdown', (e) => { if (e.target.id === 'modal') closeModal(null); });
   $('#fileImage').onchange = async (e) => { for (const f of e.target.files) await insertImageFile(f); e.target.value = ''; };
+  $('#fileCamera').onchange = async (e) => { for (const f of e.target.files) await insertImageFile(f); e.target.value = ''; };
   $('#fileJSON').onchange = async (e) => { if (e.target.files[0]) await importJSONFile(e.target.files[0]); e.target.value = ''; };
   addEventListener('resize', () => { resize(); if (S.editingId) layoutEditor(); if (P.on) goSlide(P.i); });
   $('#presPrev').onclick = () => goSlide(P.i - 1); $('#presNext').onclick = () => goSlide(P.i + 1); $('#presExit').onclick = stopPresent;
@@ -1393,9 +1608,10 @@ async function boot() {
   sync = createSync({
     adapter, cfg,
     onStatus: setSyncState,
-    onNotice: (msg) => toast(msg, { ms: 9000, kind: 'warn', action: 'History', onAction: versionsDialog }),
+    onNotice: (msg) => (/Drive inbox/.test(msg) ? toast(msg, { ms: 9000, kind: /skipped/.test(msg) ? 'warn' : undefined }) : toast(msg, { ms: 9000, kind: 'warn', action: 'History', onAction: versionsDialog })),
     onBoardChanged: (id) => { if (S.board && S.board.id === id) reloadCurrentFromDB(); },
     onBoardsListChanged: async () => { await refreshPending(); renderDrawer(); },
+    buildInboxBoard: makeInboxBoard,
   });
 
   await refreshPending();
@@ -1426,5 +1642,5 @@ async function boot() {
 }
 
 // Test / debugging hook (no secrets here).
-window.__wb = { S, PREF, P, startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
+window.__wb = { S, PREF, P, readClip, copySelected, pasteClip, dictateNote, renderDrawer, setBoardMeta: (...a) => setBoardMeta(...a), makeInboxBoard: (...a) => makeInboxBoard(...a), startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
 boot().catch((e) => { console.error(e); toast('Startup error: ' + e.message, { kind: 'error', ms: 0 }); });

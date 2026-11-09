@@ -13,7 +13,7 @@ const FOLDER = 'application/vnd.google-apps.folder';
 // Full Drive scope: needed so the app can see the "Whiteboard" folder (created outside the app)
 // and open any Drive document you link on a board. See README › "Why the drive scope".
 const SCOPE = 'https://www.googleapis.com/auth/drive';
-export const SUBFOLDERS = ['boards', 'versions', 'images', 'templates', 'documents', 'source'];
+export const SUBFOLDERS = ['boards', 'versions', 'images', 'templates', 'documents', 'source', 'inbox'];
 const FIELDS = 'id,name,mimeType,modifiedTime,createdTime,appProperties,webViewLink';
 
 export class AuthError extends Error {}
@@ -96,7 +96,7 @@ export class GoogleDriveAdapter {
     return r.id;
   }
   async ensureReady() {
-    if (this.folders && this.folders.root) {
+    if (this.folders && this.folders.root && SUBFOLDERS.every((s) => this.folders[s])) {
       if (Date.now() - (this._checkedAt || 0) < 30_000) return this.folders;
       // Re-check the root folder once per sync: it may have been deleted or trashed in Drive.
       const st = await this.fileState(this.folders.root);
@@ -152,6 +152,9 @@ export class GoogleDriveAdapter {
   async updateFile(id, name, body, mime = 'application/json', appProperties = {}) {
     const mp = this.multipart({ name, appProperties }, body, mime);
     return this.api(`/files/${id}?uploadType=multipart&fields=${FIELDS}`, { method: 'PATCH', ...mp }, UPLOAD);
+  }
+  async renameFile(id, name) {
+    return this.api(`/files/${id}?fields=id,name`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
   }
   async trash(id) {
     return this.api(`/files/${id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });

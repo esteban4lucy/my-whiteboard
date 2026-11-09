@@ -55,6 +55,7 @@ export class MockDriveAdapter {
     await op('readwrite', (s) => s.put(f));
     const { content, ...m } = f; return m;
   }
+  async renameFile(id, name) { this.check('renameFile'); const f = await op('readonly', (s) => s.get(id)); f.name = name; await op('readwrite', (s) => s.put(f)); return { id, name }; }
   async trash(id) { this.check('trash'); const f = await op('readonly', (s) => s.get(id)); f.trashed = true; await op('readwrite', (s) => s.put(f)); return { id }; }
   async fileState(id) { this.check('fileState'); const f = await op('readonly', (s) => s.get(id)); return f && !f.trashed ? 'ok' : 'gone'; }
   consumeRootChanged() { return false; }

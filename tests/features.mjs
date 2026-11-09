@@ -2,7 +2,8 @@
 import { chromium } from 'playwright-core';
 import fs from 'fs';
 const BASE = 'http://127.0.0.1:8765/my-whiteboard/';
-const res = []; const ok = (n, c, i = '') => { res.push([c ? 'PASS' : 'FAIL', n, i]); console.log(c ? 'PASS' : 'FAIL', n, i); };
+const res = []; const closePops = async (p) => { if (await p.$('.popover')) { await p.mouse.click(900, 470); await p.waitForTimeout(80); } };
+const ok = (n, c, i = '') => { res.push([c ? 'PASS' : 'FAIL', n, i]); console.log(c ? 'PASS' : 'FAIL', n, i); };
 const b = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
 const errs = [];
 
@@ -56,21 +57,21 @@ const errs = [];
   await p.mouse.move(lp.x, lp.y); await p.mouse.down(); await p.waitForTimeout(750); await p.mouse.up(); await p.waitForTimeout(100);
   await p.click('#ctxbar [data-act=unlock]');
   ok('Unlock button unlocks the group', !(await items()).filter((i) => i.groupId === col.groupId).some((i) => i.locked));
-  await p.click('#btnUndo'); ok('Undo re-locks', (await items()).filter((i) => i.groupId === col.groupId).every((i) => i.locked));
+  await closePops(p); await p.click('#btnUndo'); ok('Undo re-locks', (await items()).filter((i) => i.groupId === col.groupId).every((i) => i.locked));
   await p.click('#btnRedo'); ok('Redo unlocks again', !(await items()).filter((i) => i.groupId === col.groupId).some((i) => i.locked));
   // move the now-unlocked column (group) – frame + header move together
   const hdr0 = (await items()).find((i) => i.groupId === col.groupId && i.type === 'text');
   const cc = await scr(col.x1 + 150, 730); await drag(cc, { x: cc.x, y: cc.y + 60 });
   const hdr1 = (await items()).find((i) => i.id === hdr0.id), col1 = (await items()).find((i) => i.id === col.id);
   ok('Grouped column moves together once unlocked', col1.y1 > 20 && Math.abs((hdr1.y - hdr0.y) - (col1.y1 - col.y1)) < 0.01, `dy frame ${col1.y1 - col.y1}, header ${hdr1.y - hdr0.y}`);
-  await p.click('#btnUndo');
+  await closePops(p); await p.click('#btnUndo');
   // lock it back via ctxbar
   await p.mouse.click(cc.x, cc.y); await p.click('#ctxbar [data-act=lock]');
   ok('Lock button locks selection & deselects', (await items()).filter((i) => i.groupId === col.groupId).every((i) => i.locked) && (await sel()) === 0);
   // Unlock all via ⋯ menu
   await p.click('#btnMore'); await p.click('.popover >> text=Unlock all items');
   ok('⋯ › Unlock all unlocks every item', !(await items()).some((i) => i.locked));
-  await p.click('#btnUndo'); ok('Undo of Unlock all re-locks', (await items()).filter((i) => i.locked).length === 8);
+  await closePops(p); await p.click('#btnUndo'); ok('Undo of Unlock all re-locks', (await items()).filter((i) => i.locked).length === 8);
 
   // ---- multi-select + group on a fresh blank board
   await ev(() => __wb.createBoard(__wb.BUILTIN_TEMPLATES[0], 'Group test')); await p.waitForTimeout(200);
@@ -101,7 +102,7 @@ const errs = [];
   it = await items();
   const n1 = it.find((i) => i.id === 'n1'), n2 = it.find((i) => i.id === 'n2');
   ok('Group resizes together (uniform scale)', n1.w > 260 && Math.abs(n1.w - n2.w) < 0.01 && n2.x > 500, `w=${n1.w.toFixed(0)} n2.x=${n2.x.toFixed(0)}`);
-  await p.click('#btnUndo'); it = await items();
+  await closePops(p); await p.click('#btnUndo'); it = await items();
   ok('Undo group resize', it.find((i) => i.id === 'n1').w === 200);
   // lock group, sync, check JSON in Drive
   await p.mouse.click(300, 380); await p.click('#ctxbar [data-act=lock]');
@@ -122,13 +123,13 @@ const errs = [];
   ok('Ctrl+Shift+G ungroups', !it.find((i) => i.id === 't1').groupId && !it.find((i) => i.id === 'r1').groupId);
   await ev(() => __wb.setSel(['r1'])); await p.keyboard.press('Control+l');
   ok('Ctrl+L locks', (await items()).find((i) => i.id === 'r1').locked === true);
-  await p.click('#btnUndo');
+  await closePops(p); await p.click('#btnUndo');
   // ---- text formatting
   await ev(() => __wb.setSel(['t1'])); await p.click('#ctxbar [data-act=format]');
   await p.click('.popover [data-size=XL]'); await p.click('.popover .fmt-b'); await p.click('.popover .fmt-i'); await p.click('.popover .fmt-color >> nth=1');
   let t1 = (await items()).find((i) => i.id === 't1');
   ok('Free text: size XL, bold, italic, colour', t1.fontSize === 64 && t1.bold && t1.italic && t1.color === '#e53935', JSON.stringify(t1));
-  await p.click('#btnUndo'); t1 = (await items()).find((i) => i.id === 't1');
+  await closePops(p); await p.click('#btnUndo'); t1 = (await items()).find((i) => i.id === 't1');
   ok('Undo text colour', t1.color === 'ink' && t1.bold);
   await p.click('#btnMore'); await p.click('.popover >> text=Unlock all items');
   await ev(() => __wb.setSel(['n1', 'n2']));

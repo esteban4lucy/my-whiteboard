@@ -61,6 +61,8 @@
       <button id="drawerClose" class="tool" aria-label="Close">✕</button>
     </div>
     <button id="btnNewBoard" class="btn primary block">+ New board</button>
+    <input id="boardSearch" type="search" class="board-search" placeholder="Filter boards by name or tag…" aria-label="Filter boards">
+    <div id="boardTags" class="tag-chips"></div>
     <div id="boardList" class="board-list"></div>
   </aside>
 
@@ -72,6 +74,7 @@
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <input type="file" id="fileImage" accept="image/*" multiple hidden>
+  <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
   <input type="file" id="fileJSON" accept=".json,application/json" hidden>
   <noscript>My Whiteboard needs JavaScript.</noscript>
   <script type="module" src="js/app.js"></script>

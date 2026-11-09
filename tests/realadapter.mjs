@@ -96,7 +96,7 @@ async function run(mail, allowed) {
   ok('GIS token request uses drive scope + consent on first sign-in', gis.scope === 'https://www.googleapis.com/auth/drive' && gis.prompt === 'consent', JSON.stringify(gis));
   const all = [...files.values()];
   const subs = all.filter((f) => f.mimeType === FOLDER && f.parents[0] === ROOT).map((f) => f.name).sort();
-  ok('Uses existing Whiteboard folder (ROOT_FOLDER_ID), reuses existing subfolder, creates missing ones', subs.join(',') === 'boards,documents,images,source,templates,versions' && all.filter((f) => f.name === 'boards').length === 1, subs.join(','));
+  ok('Uses existing Whiteboard folder (ROOT_FOLDER_ID), reuses existing subfolder, creates missing ones', subs.join(',') === 'boards,documents,images,inbox,source,templates,versions' && all.filter((f) => f.name === 'boards').length === 1, subs.join(','));
   const board = all.find((f) => f.parents[0] === 'sub-boards' && !f.trashed);
   ok('Board JSON uploaded via multipart into boards/ with appProperties', board && board.name === 'My first board.board.json' && board.appProperties.boardId && JSON.parse(board.content.toString()).app === 'my-whiteboard');
   // edit & push update
@@ -108,9 +108,17 @@ async function run(mail, allowed) {
   board.content = Buffer.from(JSON.stringify(d)); board.modifiedTime = new Date(Date.now() + 99999).toISOString();
   await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
   ok('Remote change pulled via alt=media', await p.evaluate(() => __wb.S.board.items.some((i) => i.text === 'Edited elsewhere')));
+  // Drive inbox via the real adapter: a plain JSON file (as the Drive connector writes it, no appProperties)
+  const inboxF = [...files.values()].find((f) => f.name === 'inbox' && f.parents[0] === ROOT && f.mimeType === FOLDER);
+  const mk = (id, name, txt) => files.set(id, { id, name, mimeType: 'application/json', parents: [inboxF.id], trashed: false, appProperties: {}, content: Buffer.from(txt), modifiedTime: new Date().toISOString(), createdTime: new Date().toISOString() });
+  mk('inb1', 'review.json', JSON.stringify({ type: 'new-board', name: 'Weekly Review – {{date}}', template: 'Weekly Review', replace: { '{{date}}': '16 Nov 2026' }, id: 'wr-2026-11-16' }));
+  mk('inb2', 'oops.json', '{"type":"new-board"}');
+  await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  const nb = await p.evaluate(() => __wb.db.get('boards', 'b-inbox-wr-2026-11-16'));
+  ok('Inbox (real adapter): JSON file → board, file trashed, bad file renamed ERROR', nb && nb.name === 'Weekly Review – 16 Nov 2026' && files.get('inb1').trashed === true && files.get('inb2').name.startsWith('ERROR – "name" is required') && !files.get('inb2').trashed && [...files.values()].some((f) => f.appProperties.boardId === 'b-inbox-wr-2026-11-16' && !f.trashed), files.get('inb2').name);
   // versions + prune via real adapter
   for (let i = 0; i < 7; i++) await p.evaluate(() => __wb.sync.saveVersion(__wb.S.board, 'manual'));
-  const vers = [...files.values()].filter((f) => f.parents[0] !== ROOT && files.get(f.parents[0])?.name === 'versions');
+  const vers = [...files.values()].filter((f) => f.parents[0] !== ROOT && files.get(f.parents[0])?.name === 'versions' && !/Weekly Review/.test(f.name) && f.appProperties.boardId !== 'b-inbox-wr-2026-11-16');
   ok('Versions: 5 kept, rest trashed (real adapter)', vers.filter((v) => !v.trashed).length === 5 && vers.filter((v) => v.trashed).length >= 3, `${vers.filter((v) => !v.trashed).length} live / ${vers.filter((v) => v.trashed).length} trashed`);
   // token expiry → 401 → pill "Sign in"
   await p.evaluate(() => { __wb.adapter.token.access_token = 'expired'; });

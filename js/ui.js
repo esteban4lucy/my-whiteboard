@@ -14,6 +14,8 @@ export function h(tag, attrs = {}, ...kids) {
 const P = (d) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 export const ICONS = {
   menu: P('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  clip: P('<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6"/>'),
+  send: P('<rect x="2" y="6" width="10" height="12" rx="1.5"/><rect x="14" y="6" width="8" height="12" rx="1.5"/><path d="M9 12h9M15 9l3 3-3 3"/>'),
   tag: P('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
   frame: P('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18"/>'),
   collapse: P('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 11l4 4 4-4"/>'),

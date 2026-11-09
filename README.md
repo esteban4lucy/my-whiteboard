@@ -43,7 +43,8 @@ A private, offline-first, Mural-style whiteboard that runs in your browser on ph
 | `js/drive.js` | Google Drive adapter (GIS token + Drive REST v3 via `fetch`). |
 | `js/mockdrive.js` | Fake Drive used only by automated tests (`?mock=1`). The normal app never loads it. |
 | `js/export.js` | PNG / PDF / JSON export (the PDF writer is built in, with no library). |
-| `js/templates.js` | Built-in templates. |
+| `js/templates.js` | Built-in templates (`{{date}}` is filled in when a board is created). |
+| `js/ink.js` | Handwriting smoothing and shape recognition. |
 | `sw.js`, `manifest.webmanifest`, `icons/` | PWA: offline cache and "Add to Home Screen". |
 
 ## 3. Drive folder structure
@@ -56,10 +57,11 @@ Whiteboard/
 ├── images/      pictures you uploaded to boards
 ├── templates/   templates you saved ("<Name>.template.json"); copies of the 6 built-ins
 ├── documents/   optional: documents you upload from the app to link on boards
+├── inbox/       drop a {"type":"new-board",…} JSON file here → a board is created on the next sync (see §5)
 └── source/      the app's source code (zip + files) so you can edit/redeploy it
 ```
 
-A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt }`. Items are strokes, shapes, text, sticky notes, pictures and link cards. The app identifies a board by the `boardId` stored in the file's Drive properties, so renaming a file in Drive does not break anything. **Organisation:** boards form one flat list (newest first) with full search. This is the simplest structure that stays reliable.
+A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt }`. Items are strokes, shapes, text, sticky notes, pictures and link cards. The app identifies a board by the `boardId` stored in the file's Drive properties, so renaming a file in Drive does not break anything. **Organisation:** boards form one list (newest first). You can pin favourites to the top and give boards tags (they work like folders, and a board can have several), and filter by name or tag. Search covers everything.
 
 ## 4. Setup status
 
@@ -147,6 +149,72 @@ A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt 
 
 All of these can be undone, are saved in the board JSON and sync to your other devices. Older boards open unchanged.
 
+### Copy & paste, camera, dictation, board picker, handwriting
+
+**Copy, paste & duplicate (also between boards)**
+* Select › **Copy** button (clipboard icon) › *Copy*, *Cut* or *Copy to another board…*. Desktop: **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+D**.
+* Open any board and paste: desktop **Ctrl+V**; phone **+ › Paste**. Copies keep their groups, and arrows stay connected to the copied notes. Copies are never locked. The copy stays available until you copy something else, and it also works offline.
+* **Copy to another board…** places the copies below that board's content without leaving the current board.
+* **Pictures from the clipboard:** copy an image in any app, then press Ctrl+V (desktop) or use **+ › Paste** (phone; the browser may ask for permission). Copied text or links become a text item or a link card.
+
+**Phone camera & dictated notes**
+* **+ › Take a photo** opens the camera directly. The photo goes onto the board and is saved to Drive `images/`.
+* **+ › 🎤 Dictate a sticky note** (also in the note-colour menu): speak, check the text, then tap **Create note**. This uses the browser's built-in speech recognition where available (e.g. Chrome on Android/desktop, Safari; it usually needs a connection). Otherwise the dialog tells you to use the microphone key on your phone keyboard, and you can type instead.
+
+**Board picker (☰)**
+* Each board shows a **thumbnail**.
+* Tap **☆** to pin a board: pinned boards are listed first under ★ Pinned.
+* Use **⋯ › Tags…** to give a board tags (comma-separated, e.g. `work, weekly`). This works like folders, and a board can be in several.
+* The chips (*All*, *★ Pinned*, *#tag*) and the filter box narrow the list by name or tag.
+* Pins and tags sync to your other devices.
+
+**Handwriting smoothing & shape recognition**
+* **Smooth handwriting** (on by default) tidies pen strokes as you lift the pen.
+* **Shape recognition** (off by default): with the pen, draw a box, circle/ellipse, straight line or arrow (a line with a "V" head drawn in the same stroke). It becomes a clean shape.
+  * **Undo once** right after brings your hand-drawn stroke back.
+  * Scribbles and writing stay as ink.
+* Toggle either option by tapping the **pen tool again**, or in ⋯. These settings apply per device.
+
+New boards made from a template fill in `{{date}}` with today's date (e.g. the Weekly Review title and the Meeting Notes date line).
+
+### Drive inbox: create boards from a JSON file
+
+Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devices syncs with the app open (on opening, every 60 s, or tap the status pill), the app:
+1. creates the board,
+2. uploads it to `boards/`,
+3. moves the inbox file to the Drive bin.
+
+**File format.** Save it as a plain `.json` file with MIME type `application/json`, not as a Google Doc:
+
+```json
+{
+  "type": "new-board",
+  "name": "Weekly Review – {{date}}",
+  "template": "Weekly Review",
+  "replace": { "{{date}}": "16 Nov 2026" },
+  "id": "weekly-review-2026-11-16",
+  "notes": ["Ship batch 3", { "text": "Plan next week", "color": "#c8e6c9", "tags": ["plan"], "due": "2026-11-20" }],
+  "tags": ["weekly"],
+  "pinned": true
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `type` | yes | Must be `"new-board"`. |
+| `name` | yes | Board name. Replacements apply here too. |
+| `template` | no | Template name or id, case-insensitive: `Blank` (default), `Meeting Notes`, `Brainstorm`, `Project Plan`, `Kanban`, `Weekly Review`, or one of your saved templates. |
+| `replace` | no | `{ "text to find": "replacement" }`, applied to the name, note, text and frame titles. `{{date}}` defaults to today (e.g. "16 Nov 2026"). |
+| `id` | no, recommended | Idempotency key. The same `id` never creates a second board, even if the same file is uploaded twice. Without it, the Drive file id is used. |
+| `notes` | no | Extra sticky notes placed under the template, 4 per row. Each is a string or `{ "text", "color": "#rrggbb", "tags": [..], "due": "YYYY-MM-DD" }`. |
+| `tags`, `pinned` | no | Board tags and pin, shown in the board picker. |
+
+**Errors.** A file that can't be used (invalid JSON, missing `type`/`name`, unknown template) is **not** deleted. It is renamed `ERROR – <reason> – <original name>` and stays in `inbox/`. The app shows a notice, and later syncs skip that file. Fix it, then upload it again under a new name.
+
+**From a scheduled routine (Drive connector):** create a file named e.g. `weekly-review-2026-11-16.json` in the `inbox` folder (id below) with MIME type `application/json`. Turn off conversion to Google Docs (`disableConversionToGoogleType: true`). The content is the JSON above.
+* Minimal example: `{"type":"new-board","name":"Weekly Review – 2026-11-16","template":"Weekly Review","replace":{"{{date}}":"16 Nov 2026"},"id":"wr-2026-11-16"}`.
+* `inbox` folder id: `1y9BREB2GW9A6vsqyhbkG88UopoYcbaVa`.
+
 ## 6. Offline and sync behaviour
 
 * **Every change is saved to the device first (IndexedDB)**, so nothing waits for the network. After a short pause the sync engine pushes changes to Drive.
@@ -187,10 +255,20 @@ Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in htt
 * Some websites refuse to be shown in the Preview frame; **Open ↗** always works.
 * Pictures added by URL from sites that block cross-site access can't be included in PNG/PDF exports. Upload them instead.
 * Version history and documents in `Whiteboard/documents` need a connection to view.
+* Shape recognition knows boxes, circles/ellipses, lines and arrows drawn in one stroke. Rotated boxes become upright rectangles.
+* Dictation depends on the browser's speech service. Firefox has none, so use the keyboard microphone there.
+* Some browsers only allow reading clipboard pictures through Ctrl+V or a permission prompt. If **+ › Paste** can't read one, paste with the keyboard, or save the picture and use **+ › Upload picture**.
+* The Drive inbox is processed only while the app is open on a signed-in device.
 
 ## 11. How it was tested
 
 These automated browser tests ran in headless Chrome with real touch events, with the app served under a `/my-whiteboard/` sub-path as on GitHub Pages:
+* **Copy/paste, camera, dictation, board picker, handwriting, Drive inbox (desktop + 390 px phone):**
+  * copy/cut/paste/duplicate within and across boards (groups and arrows re-wired), copy to another board, and clipboard pictures (+ › Paste and Ctrl+V);
+  * camera input, and dictation with a simulated speech engine plus the fallback;
+  * thumbnails, pin, tags, chips and filter, synced to Drive;
+  * smoothing, rectangle/ellipse/line/arrow recognition, scribbles left alone, the toggles, and undo back to the stroke;
+  * inbox: board creation from a template with replacements, extra notes, idempotency, files trashed, ERROR renames, unknown template, and the default `{{date}}`, also through the real Drive adapter.
 * **Connectors, Kanban notes, frames, arrange & layers (desktop + 390 px phone):** arrows attach and follow notes, end handles detach and re-attach, Connect button, duplicated arrows stay wired to the copies, column snapping (centring, stacking, on/off), tags and due dates, checklist ticking, search by tag, PNG export, frames carry their contents, collapse/expand, put in a frame, mini-map jump, present mode (keys, buttons, swipe), align and distribute, snap to grid, layer order, background layer and its lock, undo for every action, persistence through Drive sync, and older boards.
 * **Lock, group & text format (desktop + 390 px phone):** Shift-click and box-select, phone multi-select mode, group move/resize, lock/unlock (incl. long-press on phone and *Unlock all*), locked items can't be moved, erased or deleted, Ctrl+A/G/L/B/I, text size/colour/bold/italic, undo/redo of every action, persistence through Drive sync and reload, PNG/PDF export, the Kanban template, and older boards without the new fields.
 * **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.

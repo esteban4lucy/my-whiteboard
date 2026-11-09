@@ -3,7 +3,7 @@
 // (the Drive modifiedTime we last saw), updatedAt (local edit time, used for last-write-wins).
 import { db, kv } from './db.js';
 
-const boardPayload = (b, imageFiles) => ({ app: 'my-whiteboard', schema: 1, id: b.id, name: b.name, background: b.background, ...(b.bgLocked ? { bgLocked: true } : {}), createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items, ...(imageFiles ? { imageFiles } : {}) });
+const boardPayload = (b, imageFiles) => ({ app: 'my-whiteboard', schema: 1, id: b.id, name: b.name, background: b.background, ...(b.bgLocked ? { bgLocked: true } : {}), ...(b.pinned ? { pinned: true } : {}), ...(b.tags && b.tags.length ? { tags: b.tags } : {}), createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items, ...(imageFiles ? { imageFiles } : {}) });
 // Map of uploaded pictures used by a board: { blobKey: driveFileId } (lets other devices download them).
 async function imageMap(b) {
   const out = {};
@@ -17,7 +17,7 @@ async function imageMap(b) {
 const safeName = (s) => String(s || 'Untitled').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
 const fileName = (b) => `${safeName(b.name)}.board.json`;
 
-export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged }) {
+export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged, buildInboxBoard }) {
   let running = null, again = false, timer = null;
   const maxVersions = cfg.MAX_VERSIONS || 5;
   const versionGapMs = (cfg.VERSION_INTERVAL_MINUTES ?? 10) * 60_000;
@@ -84,7 +84,7 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
 
   async function applyRemote(local, remoteMeta, data) {
     const rec = {
-      ...(local || {}), id: data.id, name: data.name, background: data.background || 'grid', bgLocked: data.bgLocked ? true : undefined, items: data.items || [],
+      ...(local || {}), id: data.id, name: data.name, background: data.background || 'grid', bgLocked: data.bgLocked ? true : undefined, pinned: data.pinned ? true : undefined, tags: Array.isArray(data.tags) && data.tags.length ? data.tags : undefined, items: data.items || [],
       createdAt: data.createdAt || Date.now(), updatedAt: data.updatedAt || Date.now(),
       dirty: false, deleted: false, driveFileId: remoteMeta.id, driveModifiedTime: remoteMeta.modifiedTime,
     };
@@ -186,13 +186,50 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
       if (!remoteIds.has(t.driveFileId)) { if (!t.dirty) await db.del('templates', t.id); continue; }
       if (t.dirty) { await adapter.updateFile(t.driveFileId, `${safeName(t.name)}.template.json`, payload, 'application/json', { templateId: t.id }); t.dirty = false; await db.put('templates', t); }
     }
+    const byFile = new Map((await db.all('templates')).filter((t) => t.driveFileId).map((t) => [t.driveFileId, t]));
     for (const r of remote) {
-      if (known.has(r.id)) continue;
+      const loc = byFile.get(r.id);
+      // new on Drive, or edited on Drive / another device since we last read it (and not changed here)
+      if (known.has(r.id) && (!loc || loc.dirty || !r.modifiedTime || loc.remoteMod === r.modifiedTime)) continue;
       try {
         const d = await adapter.readJSON(r.id);
         if (!Array.isArray(d.items)) continue;
-        await db.put('templates', { id: d.id || r.id, name: d.name || r.name.replace(/\.(template\.)?json$/, ''), background: d.background || 'grid', bgLocked: d.bgLocked ? true : undefined, items: d.items, driveFileId: r.id, dirty: false });
+        await db.put('templates', { id: d.id || r.id, name: d.name || r.name.replace(/\.(template\.)?json$/, ''), background: d.background || 'grid', bgLocked: d.bgLocked ? true : undefined, items: d.items, driveFileId: r.id, dirty: false, remoteMod: r.modifiedTime });
       } catch { /* skip non-template files */ }
+    }
+  }
+
+  // Drive inbox (Whiteboard/inbox): each {"type":"new-board", ...} JSON file creates one board, then goes to the Drive bin.
+  // Idempotent: the board id is derived from the file's "id" (or the Drive file id), so a file is never turned into two boards.
+  async function processInbox(notices) {
+    if (!buildInboxBoard) return;
+    const files = (await adapter.listFiles('inbox')).filter((f) => !/^ERROR/i.test(f.name)).sort((a, b) => String(a.createdTime || a.name).localeCompare(String(b.createdTime || b.name)));
+    if (!files.length) return;
+    const remoteIds = new Set((await adapter.listFiles('boards')).map((r) => r.appProperties && r.appProperties.boardId).filter(Boolean));
+    const done = new Set(await kv.get('inboxDone', []));
+    for (const f of files) {
+      try {
+        if (!done.has(f.id)) {
+          let d;
+          try { d = await adapter.readJSON(f.id); } catch (e) { if (e instanceof SyntaxError) { e.inbox = true; e.message = 'not valid JSON'; } throw e; }
+          const bad = (m) => { const e = new Error(m); e.inbox = true; return e; };
+          if (!d || typeof d !== 'object' || d.type !== 'new-board') throw bad('"type" must be "new-board"');
+          if (typeof d.name !== 'string' || !d.name.trim()) throw bad('"name" is required');
+          const bid = 'b-inbox-' + String(d.id || f.id).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+          if (!(await db.get('boards', bid)) && !remoteIds.has(bid)) {
+            const b = await buildInboxBoard(d, bid);
+            const now = Date.now(); Object.assign(b, { createdAt: now, updatedAt: now, dirty: true, deleted: false });
+            await db.put('boards', b);
+            notices.push(`New board “${b.name}” was created from your Drive inbox.`);
+          }
+          done.add(f.id); await kv.set('inboxDone', [...done].slice(-300));
+        }
+        await adapter.trash(f.id); // processed: moved to the Drive bin (recoverable for 30 days)
+      } catch (e) {
+        if (!e.inbox) throw e; // network / auth problems: retry on the next sync
+        try { await adapter.renameFile(f.id, `ERROR – ${e.message} – ${f.name}`.slice(0, 250)); } catch { /* ignore */ }
+        notices.push(`Drive inbox: “${f.name}” was skipped: ${e.message}. It was renamed “ERROR – …” – fix it and upload it again.`);
+      }
     }
   }
 
@@ -213,6 +250,7 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
       await adapter.ensureReady();
       if (adapter.consumeRootChanged && adapter.consumeRootChanged()) await relinkEverything(notices);
       await pushImages(notices);
+      await processInbox(notices);
       await syncBoards(notices);
       await syncTemplates();
       await kv.set('lastSync', Date.now());

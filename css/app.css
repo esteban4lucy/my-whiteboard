@@ -152,3 +152,16 @@ input[type=date] { font: inherit; font-size: 16px; color: var(--fg); background:
 .al-btn { font-size: 20px !important; }
 @media (max-width: 520px) { .minimap { width: 150px; height: 100px; bottom: calc(128px + var(--safe-b)); } .zoom .tool { min-width: 40px; } }
 @media (max-width: 520px) { .ctxbar { flex-wrap: wrap; justify-content: center; overflow-x: visible; } }
+
+/* batch 3: board picker thumbnails, pins, tags; dictation */
+.board-search { min-height: 44px !important; padding: 8px 12px !important; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; } .tag-chips:empty { display: none; }
+.tag-chip { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; min-height: 36px; padding: 0 12px; font-size: 14px; cursor: pointer; }
+.tag-chip.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.list-head { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 8px 6px 2px; }
+.board-open { flex-direction: row !important; align-items: center; gap: 10px; }
+.board-thumb { width: 72px; height: 48px; flex: 0 0 72px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+.board-info { display: flex; flex-direction: column; min-width: 0; } .board-info strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .board-info small { color: var(--muted); }
+.board-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; } .mini-tag { font-size: 11px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-radius: 999px; padding: 1px 7px; }
+.tool.pin { font-size: 22px; color: var(--muted); } .tool.pin.on { color: #f9ab00; }
+.dict-text { min-height: 120px; font-size: 18px !important; }
