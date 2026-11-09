@@ -2,7 +2,9 @@
 
 A private, offline-first, Mural-style whiteboard that runs in your browser on phone, tablet and desktop, and keeps everything in your Google Drive folder **Whiteboard**.
 
-* **App URL:** *(added once hosting is set up; planned: `https://<your-github-username>.github.io/my-whiteboard/`)*
+* **App URL (bookmark this):** https://esteban4lucy.github.io/my-whiteboard/
+* **GitHub repo:** https://github.com/esteban4lucy/my-whiteboard (public; contains code only, never your data)
+* **Hosting:** GitHub Pages, deployed from the `main` branch (repo root)
 * **Drive folder:** https://drive.google.com/drive/folders/11C9mAo7-4w-oWULU_HL98k3_knVlI7jQ
 * **Source code:** `Whiteboard/source/` (zip plus the individual files)
 
@@ -59,7 +61,9 @@ Whiteboard/
 
 A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt }`. Items are strokes, shapes, text, sticky notes, pictures and link cards. The app identifies a board by the `boardId` stored in the file's Drive properties, so renaming a file in Drive does not break anything. **Organisation:** boards form one flat list (newest first) with full search. This is the simplest structure that stays reliable.
 
-## 4. One-time setup (about 10 minutes, free)
+## 4. Setup status
+
+**Done:** the OAuth Client ID is set in `config.js` (`577841464326-tnald458sqaeomld1sj5laqk5d8gtufl.apps.googleusercontent.com`). Its authorised JavaScript origin is `https://esteban4lucy.github.io`, and the app is live at https://esteban4lucy.github.io/my-whiteboard/. The steps below are kept as a reference in case you ever need to recreate the client or host it elsewhere.
 
 ### 4a. Create the Google OAuth Client ID
 1. Go to <https://console.cloud.google.com/> (signed in with your Google account) › project picker › **New project** › name it `My Whiteboard` › Create.
@@ -77,12 +81,11 @@ A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt 
 
 > **"Google hasn't verified this app" warning:** this is expected for a personal app. Click **Continue**. In *Testing* mode Google may ask you to approve again about once a week. To avoid that, you can set the publishing status to *In production* without verification; it remains limited to you and still shows the warning screen.
 
-### 4b. Host it (GitHub Pages, free, permanent URL)
-1. Create a GitHub repository named `my-whiteboard` and upload the contents of `source/my-whiteboard.zip` (the files go at the root of the repo, including the empty `.nojekyll`).
-2. Go to repo **Settings › Pages** › Source: *Deploy from a branch* › `main` / `(root)` › Save.
-3. After about a minute the app is at `https://<your-github-username>.github.io/my-whiteboard/`. Bookmark it and add it to your phone's home screen.
-
-The app uses relative paths only, so it works under any sub-path. The repository holds **only code, never your data**, so a public repo is fine. The Client ID is not a secret.
+### 4b. Hosting (GitHub Pages: already set up)
+* Repo: https://github.com/esteban4lucy/my-whiteboard. **Settings › Pages** is set to *Deploy from a branch* › `main` / `(root)`.
+* **To update the app:** edit the files, bump `VERSION` in `sw.js` (e.g. `v1.0.1` → `v1.0.2`), then commit and push to `main`. GitHub Pages redeploys in about a minute, and open devices show "A new version is ready – Reload".
+* The app uses relative paths only, so it works under the `/my-whiteboard/` sub-path. The empty `.nojekyll` file must stay in the repo.
+* The repository holds only code, never your data, so being public is fine. The Client ID is not a secret.
 
 ## 5. Using it
 
@@ -131,7 +134,7 @@ The app uses relative paths only, so it works under any sub-path. The repository
 
 ## 9. Changing the app later
 
-Edit the files, bump `VERSION` in `sw.js`, and upload them to the GitHub repo. Open devices show "A new version is ready – Reload". Keep a copy in `Whiteboard/source/`.
+Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in https://github.com/esteban4lucy/my-whiteboard (GitHub Pages redeploys automatically). Open devices show "A new version is ready – Reload". Keep a copy in `Whiteboard/source/`.
 
 ## 10. Known limits (v1)
 
