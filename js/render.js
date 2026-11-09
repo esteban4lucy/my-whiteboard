@@ -44,19 +44,38 @@ export function bounds(it) {
       return { x: Math.min(it.x1, it.x2), y: Math.min(it.y1, it.y2), w: Math.abs(it.x2 - it.x1), h: Math.abs(it.y2 - it.y1) };
     case 'text': {
       const lines = String(it.text || ' ').split('\n');
-      const w = Math.max(...lines.map((l) => measure(l, it.fontSize))) + 4;
+      const w = Math.max(...lines.map((l) => measure(l, fontStr(it)))) + 4;
       return { x: it.x, y: it.y, w: Math.max(w, it.fontSize), h: lines.length * it.fontSize * 1.25 };
     }
     default: return { x: it.x, y: it.y, w: it.w, h: it.h };
   }
 }
 let mctx = null;
-function measure(s, size) {
+function measure(s, font) {
   if (!mctx) mctx = (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas')).getContext('2d');
-  mctx.font = `${size}px ${FONT}`;
+  mctx.font = font;
   return mctx.measureText(s).width;
 }
 export const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+// Text formatting (optional item fields: bold, italic, fontSize; notes also textColor).
+export function fontStr(it, size) {
+  const fs = size || it.fontSize || (it.type === 'note' ? 20 : 28);
+  return `${it.italic ? 'italic ' : ''}${it.bold ? 'bold ' : ''}${fs}px ${FONT}`;
+}
+export const noteTextColor = (it) => (!it.textColor || it.textColor === 'ink' ? '#1d1d1f' : it.textColor);
+
+// Uniformly scale an item about (ox, oy) – used when resizing a group / multi-selection.
+export function scaleItem(it, ox, oy, s) {
+  const X = (x) => ox + (x - ox) * s, Y = (y) => oy + (y - oy) * s;
+  if (it.type === 'stroke') { it.points = it.points.map(([x, y, p]) => (p === undefined ? [X(x), Y(y)] : [X(x), Y(y), p])); it.size = Math.max(1, it.size * s); }
+  else if ('x1' in it) { it.x1 = X(it.x1); it.y1 = Y(it.y1); it.x2 = X(it.x2); it.y2 = Y(it.y2); it.size = Math.max(1, (it.size || 2) * s); }
+  else {
+    it.x = X(it.x); it.y = Y(it.y);
+    if ('w' in it) { it.w *= s; it.h *= s; }
+    if (it.type === 'text' || it.type === 'note') it.fontSize = Math.max(6, (it.fontSize || (it.type === 'note' ? 20 : 28)) * s);
+  }
+  return it;
+}
 
 export function boardBounds(items) {
   if (!items.length) return { x: -400, y: -300, w: 800, h: 600 };
@@ -166,7 +185,7 @@ export function drawItem(ctx, it, env) {
     }
     case 'text': {
       if (env.editingId === it.id) break;
-      ctx.save(); ctx.fillStyle = col(it.color, tc); ctx.font = `${it.fontSize}px ${FONT}`; ctx.textBaseline = 'top';
+      ctx.save(); ctx.fillStyle = col(it.color, tc); ctx.font = fontStr(it); ctx.textBaseline = 'top';
       String(it.text).split('\n').forEach((l, i) => ctx.fillText(l, it.x, it.y + i * it.fontSize * 1.25));
       ctx.restore(); break;
     }
@@ -176,7 +195,7 @@ export function drawItem(ctx, it, env) {
       ctx.fillStyle = it.color || NOTE_COLORS[0]; ctx.fillRect(it.x, it.y, it.w, it.h);
       ctx.shadowColor = 'transparent';
       if (env.editingId !== it.id) {
-        const fs = it.fontSize || 20; ctx.fillStyle = '#1d1d1f'; ctx.font = `${fs}px ${FONT}`; ctx.textBaseline = 'top';
+        const fs = it.fontSize || 20; ctx.fillStyle = noteTextColor(it); ctx.font = fontStr(it, fs); ctx.textBaseline = 'top';
         ctx.beginPath(); ctx.rect(it.x, it.y, it.w, it.h); ctx.clip();
         wrap(ctx, it.text || '', it.w - 24).forEach((l, i) => ctx.fillText(l, it.x + 12, it.y + 12 + i * fs * 1.25));
       }

@@ -61,7 +61,7 @@ await drag([hd.x, hd.y], [hd.x + 60, hd.y + 40]);
 const resized = await ev(() => __wb.S.board.items.find((i) => i.type === 'note'));
 ok('Note resized', resized.w > moved.w + 30 && resized.h > moved.h + 20, `${moved.w}x${moved.h} -> ${resized.w}x${resized.h}`);
 // recolour via ctxbar
-await p.click('#ctxbar .chip >> nth=3');
+await p.click('#ctxbar [data-act=notecolor]'); await p.click('.popover .chip >> nth=3');
 ok('Note recoloured', (await ev(() => __wb.S.board.items.find((i) => i.type === 'note').color)) === '#b3e5fc');
 // eraser
 const before = (await items()).filter((t) => t === 'stroke').length;
@@ -95,8 +95,8 @@ const link = await ev(() => __wb.S.board.items.find((i) => i.type === 'link'));
 ok('Link card (Google Doc kind)', link && link.kind === 'doc' && link.title === 'Quarterly Plan Doc');
 const popupP = ctx.waitForEvent('page', { timeout: 3000 }).catch(() => null);
 const or = await ev((l) => __wb.toScreen({ x: l.x + l.w - 48, y: l.y + l.h - 23 }), link);
-await p.click('.toolbar [data-tool=select]'); await p.mouse.click(or.x, or.y);
-const popup = await popupP;
+await ev(() => __wb.setTool('select')); await p.mouse.click(or.x, or.y);
+const popup = await popupP; if (popup) await popup.waitForURL(/docs\.google\.com/, { timeout: 8000, waitUntil: 'commit' }).catch(() => {});
 ok('Clicking "Open" on link card opens the original', !!popup && popup.url().includes('docs.google.com/document'), popup ? popup.url() : 'no popup');
 if (popup) await popup.close();
 
@@ -161,7 +161,7 @@ await p.fill('.search-input', 'team sync'); await p.waitForTimeout(150);
 ok('Search finds board name', (await p.textContent('.results')).includes('Board name'));
 await p.fill('.search-input', 'kumquat'); await p.waitForTimeout(150);
 await p.click('.result'); await p.waitForTimeout(200);
-ok('Search result opens the board & selects item', (await ev(() => __wb.S.board.name)) === 'My first board' && (await ev(() => __wb.S.board.items.find((i) => i.id === __wb.S.sel)?.type)) === 'note');
+ok('Search result opens the board & selects item', (await ev(() => __wb.S.board.name)) === 'My first board' && (await ev(() => __wb.S.board.items.find((i) => i.id === __wb.S.sel[0])?.type)) === 'note');
 
 // --- exports
 async function dl(label) { const d = p.waitForEvent('download'); await p.click('#btnMore'); await p.click(`.popover >> text=${label}`); const x = await d; const path = await x.path(); return { name: x.suggestedFilename(), buf: fs.readFileSync(path) }; }

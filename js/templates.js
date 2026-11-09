@@ -16,6 +16,16 @@ function column(x, y, title, w, h, color, notes) {
   return out;
 }
 
+// Kanban: each column (frame + bold header) is grouped and LOCKED, so it stays put while notes move over it.
+function kanbanColumn(x, title, color, notes, n) {
+  const g = 'tpl-kanban-col-' + n;
+  return [
+    { ...rect(x, 0, x + 300, 760, 'ink', 2), locked: true, groupId: g },
+    { ...text(x + 16, 14, title, 26), bold: true, locked: true, groupId: g },
+    ...notes.map((t, i) => note(x + 30, 70 + i * 180, t, color, 240, 150)),
+  ];
+}
+
 export const BUILTIN_TEMPLATES = [
   { id: 'tpl-blank', name: 'Blank', background: 'grid', builtin: true, items: [] },
   {
@@ -58,6 +68,17 @@ export const BUILTIN_TEMPLATES = [
       ...column(320, 0, 'In progress', 300, 600, B, ['Task…']),
       ...column(640, 0, 'Blocked', 300, 600, P, ['Blocker…']),
       ...column(960, 0, 'Done', 300, 600, G, ['Done…']),
+    ],
+  },
+  {
+    id: 'tpl-kanban', name: 'Kanban', background: 'dots', builtin: true,
+    items: [
+      { ...text(0, -80, 'Kanban: <project>', 40), bold: true },
+      ...kanbanColumn(0, 'Backlog', V, ['Idea…', 'Idea…'], 1),
+      ...kanbanColumn(320, 'To do', Y, ['Task…', 'Task…'], 2),
+      ...kanbanColumn(640, 'Doing', B, ['Task…'], 3),
+      ...kanbanColumn(960, 'Done ✓', G, ['Done…'], 4),
+      text(0, 780, 'Columns are locked – drag the notes between them. Long-press a column (or ⋯ › Unlock all) to change it.', 18, '#6b7076'),
     ],
   },
   {

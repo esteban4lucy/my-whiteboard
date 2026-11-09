@@ -54,7 +54,7 @@ Whiteboard/
 ├── boards/      one JSON file per board:  "<Board name>.board.json"
 ├── versions/    last 5 snapshots per board: "<Board> — <date> UTC (<reason>).json"
 ├── images/      pictures you uploaded to boards
-├── templates/   templates you saved ("<Name>.template.json"); copies of the 5 built-ins
+├── templates/   templates you saved ("<Name>.template.json"); copies of the 6 built-ins
 ├── documents/   optional: documents you upload from the app to link on boards
 └── source/      the app's source code (zip + files) so you can edit/redeploy it
 ```
@@ -92,16 +92,31 @@ A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt 
 * **Open:** go to the URL. On a new device, tap **Sign in with Google** once; your boards then download from Drive.
 * **Install:** on iPhone, open Safari › Share › *Add to Home Screen*. On Android/Chrome, use ⋮ › *Install app*. On desktop Chrome/Edge, click the install icon in the address bar.
 * **Tools (bottom bar):** Select/move · Pen · Highlighter · Eraser (removes whole strokes/shapes) · Shapes (tap again to pick rectangle, ellipse, line or arrow) · Text · Sticky note (tap again to pick its colour) · **+** Insert (upload a picture, picture from URL, link a document) · Colour & thickness.
-* **Selecting an item** shows a small action bar: colour, edit, open/preview (links), duplicate, bring to front, send to back, delete. Drag an item to move it; drag the round handle to resize it.
+* **Selecting an item** shows a small action bar: colour, text format (Aa), edit, open/preview (links), multi-select, group/ungroup, lock, duplicate, bring to front, send to back, delete. Drag an item to move it; drag the round handle to resize it.
 * **Touch:** use one finger to draw or move. Use two fingers to pan and zoom. With the Select tool, dragging empty space pans. Double-tap a note to edit it.
-* **Desktop:** the mouse wheel pans and Ctrl+wheel zooms. Space+drag also pans. Shortcuts: V P H E S T N, Ctrl+Z, Ctrl+Shift+Z, Delete and Ctrl+F. You can paste pictures, links or text, and drag and drop picture files.
+* **Desktop:** the mouse wheel pans and Ctrl+wheel zooms. Space+drag also pans. Shortcuts: V P H E S T N, Ctrl+Z, Ctrl+Shift+Z, Delete, Ctrl+F, Ctrl+A (select all unlocked), Ctrl+G / Ctrl+Shift+G (group/ungroup), Ctrl+L (lock/unlock), Ctrl+B / Ctrl+I (bold/italic) and Esc (clear selection). You can paste pictures, links or text, and drag and drop picture files.
 * **Links and documents:** + › *Link a document* lets you paste any Google Doc, Sheet or Slides link, Drive file link or web page. You can also choose a file from `Whiteboard/documents` or upload one there. The card's **Open ↗** button opens the original, and **Preview** embeds it while you're online.
 * **Pictures:** *Upload picture* stores the image on the device right away and uploads it to `Whiteboard/images` on the next sync. *Picture from URL* keeps the link and also caches a copy so it shows offline.
 * **Boards (☰):** create, switch, rename, duplicate and delete. Tap the board title to rename it. Deleted boards go to the Drive bin, where they can be recovered for 30 days.
-* **Templates:** ☰ › **+ New board** lets you pick Blank, Meeting Notes, Brainstorm, Project Plan, Weekly Review or one of your own. To make your own, customise any board and use ⋯ › **Save board as template**. Saving with the same name updates the template.
+* **Templates:** ☰ › **+ New board** lets you pick Blank, Meeting Notes, Brainstorm, Project Plan, **Kanban**, Weekly Review or one of your own. **Kanban** comes with four locked column frames (Backlog, To do, Doing, Done ✓) and starter notes, so you can drag notes between columns without moving the columns. To make your own, customise any board and use ⋯ › **Save board as template**. Saving with the same name updates the template.
 * **Search (🔍):** searches every board's sticky notes, free text, link titles and board names. Results are grouped by board; tap one to jump to it.
 * **Export (⋯):** PNG image, PDF (always light, for printing), or JSON backup. *Import JSON* recreates a board.
 * **Theme:** the ◐ button, or ⋯ › Dark/Light mode. The choice is remembered on each device.
+
+### Lock, group & format text
+
+**Lock** (e.g. Kanban columns that must not move)
+* Select the item(s) › tap 🔒 in the action bar (desktop: Ctrl+L). Locked items can't be moved, resized, erased, edited or deleted, and a normal tap/drag on them pans the board, so you can freely drag sticky notes on top of a locked column.
+* **To unlock:** *phone* – press and hold the locked item for about half a second, then tap **🔓 Unlock**. *Desktop* – the same long-press (hold the mouse button) or Ctrl+L after selecting. *Everything at once* – tap the Select tool again › **Unlock all**, or ⋯ › **Unlock all items on this board**.
+* A selected locked item shows a 🔒 badge and the bar reads "🔒 Locked (n)".
+
+**Select several & group**
+* *Desktop:* Shift-click (or Ctrl/⌘-click) to add/remove items; Shift+drag on empty space draws a selection box; Ctrl+A selects every unlocked item.
+* *Phone:* tap the Select tool again › **Multi-select** (or the multi-select button — two ticked squares — in the action bar). A banner shows "N selected"; tap items to add or remove them, drag on empty space to box-select, tap **Done** to finish. The action bar sits just above the toolbar while in this mode.
+* Tap **Group** (Ctrl+G) to join them: tapping any member selects the whole group, and it moves, resizes (round handle, uniform scale), duplicates, locks and unlocks together. **Ungroup** (Ctrl+Shift+G) separates them. Groups and locks are saved in the board JSON and sync to your other devices.
+
+**Format text** (free text and sticky notes)
+* Select the text or note(s) › tap **Aa**: size **S / M / L / XL** (or A− / A+ for fine steps), **B** bold, *I* italic, and a text colour (for notes, "ink" is the default dark text). Works on several items or a group at once (desktop: Ctrl+B / Ctrl+I). Formatting shows in PNG/PDF exports, and every change can be undone.
 
 ## 6. Offline and sync behaviour
 
@@ -138,7 +153,7 @@ Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in htt
 
 ## 10. Known limits (v1)
 
-* There is no multi-select or lasso yet: select one item at a time.
+* Box-select is a rectangle (no free-form lasso). A multi-selection or group resizes uniformly from its top-left corner.
 * The eraser removes whole strokes and shapes rather than partial pixels.
 * Some websites refuse to be shown in the Preview frame; **Open ↗** always works.
 * Pictures added by URL from sites that block cross-site access can't be included in PNG/PDF exports. Upload them instead.
@@ -147,6 +162,7 @@ Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in htt
 ## 11. How it was tested
 
 These automated browser tests ran in headless Chrome with real touch events, with the app served under a `/my-whiteboard/` sub-path as on GitHub Pages:
+* **Lock, group & text format (desktop + 390 px phone):** Shift-click and box-select, phone multi-select mode, group move/resize, lock/unlock (incl. long-press on phone and *Unlock all*), locked items can't be moved, erased or deleted, Ctrl+A/G/L/B/I, text size/colour/bold/italic, undo/redo of every action, persistence through Drive sync and reload, PNG/PDF export, the Kanban template, and older boards without the new fields.
 * **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.
 * **Offline cycle with a simulated Drive:** the app reloads while offline, offline edits survive, it syncs on reconnect, remote changes are pulled, both conflict directions are handled, versions are pruned to 5 and restore works, deletions sync, and a "new device" first run downloads boards and pictures.
 * **The real Drive adapter** against an emulated Drive v3 REST API: folder discovery and creation, multipart uploads, UTF-8, pulls, version pruning, token expiry and re-sign-in, recovery after the folder is trashed, and rejection of other accounts.

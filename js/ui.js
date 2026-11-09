@@ -42,6 +42,12 @@ export const ICONS = {
   back: P('<rect x="4" y="4" width="12" height="12" rx="1" fill="currentColor"/><path d="M20 8v12H8"/>'),
   open: P('<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>'),
   eye: P('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  lock: P('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>'),
+  unlock: P('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 017.5-2"/>'),
+  group: P('<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><rect x="7" y="7" width="5" height="5"/><rect x="12" y="12" width="5" height="5"/>'),
+  ungroup: P('<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>'),
+  format: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><text x="2" y="18" font-size="16" font-weight="800" font-family="system-ui,sans-serif" fill="currentColor">A</text><text x="13" y="18" font-size="12" font-style="italic" font-family="system-ui,sans-serif" fill="currentColor">a</text></svg>',
+  multi: P('<rect x="3" y="3" width="8" height="8" rx="1"/><path d="M5 7l2 2 3-4"/><rect x="13" y="13" width="8" height="8" rx="1"/><path d="M15 17l2 2 3-4"/><path d="M17 4v6M14 7h6"/>'),
   shapes: P('<rect x="3" y="3" width="9" height="9" rx="1"/><circle cx="16.5" cy="16.5" r="4.5"/>'),
 };
 
