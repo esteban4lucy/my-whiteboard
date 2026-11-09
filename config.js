@@ -3,7 +3,7 @@
 window.WB_CONFIG = {
   // OAuth 2.0 Web Client ID from Google Cloud Console (APIs & Services › Credentials).
   // Leave as-is to run in local-only mode (everything works, nothing syncs to Drive).
-  CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com',
+  CLIENT_ID: '577841464326-tnald458sqaeomld1sj5laqk5d8gtufl.apps.googleusercontent.com',
 
   // Only this Google account may sign in. Set to '' to allow any account
   // (the OAuth consent screen in "Testing" mode already limits it to listed test users).
