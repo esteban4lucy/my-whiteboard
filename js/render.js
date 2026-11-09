@@ -47,8 +47,86 @@ export function bounds(it) {
       const w = Math.max(...lines.map((l) => measure(l, fontStr(it)))) + 4;
       return { x: it.x, y: it.y, w: Math.max(w, it.fontSize), h: lines.length * it.fontSize * 1.25 };
     }
+    case 'frame': return { x: it.x, y: it.y, w: it.w, h: it.collapsed ? FRAME_HEAD : it.h };
     default: return { x: it.x, y: it.y, w: it.w, h: it.h };
   }
+}
+export const FRAME_HEAD = 44;
+export const FRAME_COLORS = ['#c7d2fe', '#bae6fd', '#bbf7d0', '#fef08a', '#fed7aa', '#fbcfe8', '#e5e7eb'];
+const center = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+const inside = (p, r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+// Items whose centre lies inside a frame's full area (the frame's contents).
+export function frameContents(items, f) {
+  const r = { x: f.x, y: f.y, w: f.w, h: f.h };
+  return items.filter((it) => it !== f && it.id !== f.id && inside(center(bounds(it)), r) && !(it.type === 'frame' && it.w * it.h >= f.w * f.h));
+}
+// Ids hidden by collapsed frames.
+export function hiddenIds(items) {
+  const out = new Set();
+  for (const f of items) if (f.type === 'frame' && f.collapsed) for (const it of frameContents(items, f)) out.add(it.id);
+  return out;
+}
+// Paint order: frames at the back, then the background layer, then everything else (each in list order).
+export function drawOrder(items) {
+  const rank = (it) => (it.type === 'frame' ? 0 : it.layer === 'bg' ? 1 : 2);
+  return items.map((it, i) => [it, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]);
+}
+// Connectors: a line/arrow may carry `from` / `to` item ids; its ends then follow those items.
+function edgePoint(b, tx, ty, gap = 6) {
+  const c = center(b), dx = tx - c.x, dy = ty - c.y;
+  if (!dx && !dy) return c;
+  const t = Math.min(dx ? (b.w / 2) / Math.abs(dx) : Infinity, dy ? (b.h / 2) / Math.abs(dy) : Infinity);
+  const len = Math.hypot(dx, dy), k = Math.min(1, t + gap / len);
+  return { x: c.x + dx * k, y: c.y + dy * k };
+}
+export function updateConnectors(items) {
+  let map = null;
+  for (const it of items) {
+    if ((it.type !== 'arrow' && it.type !== 'line') || (!it.from && !it.to)) continue;
+    if (!map) map = new Map(items.map((i) => [i.id, i]));
+    const A = it.from && map.get(it.from), B = it.to && map.get(it.to);
+    const ba = A && bounds(A), bb = B && bounds(B);
+    const ta = bb ? center(bb) : { x: it.x2, y: it.y2 }, tb = ba ? center(ba) : { x: it.x1, y: it.y1 };
+    if (ba) { const p = edgePoint(ba, ta.x, ta.y); it.x1 = Math.round(p.x * 10) / 10; it.y1 = Math.round(p.y * 10) / 10; }
+    if (bb) { const p = edgePoint(bb, tb.x, tb.y); it.x2 = Math.round(p.x * 10) / 10; it.y2 = Math.round(p.y * 10) / 10; }
+  }
+}
+// Sticky-note layout: wrapped lines, checklist lines ("[ ] task" / "[x] done"), and a footer for tags / due date.
+const CHECK_RE = /^\[( |x|X)\]\s?/;
+export const NOTE_FOOTER = 34;
+export function noteLayout(it) {
+  const fs = it.fontSize || 20, lh = fs * 1.25, box = Math.round(fs * 0.85), font = fontStr(it, fs);
+  if (!mctx) measure('', font);
+  mctx.font = font;
+  const lines = []; let y = it.y + 12;
+  String(it.text || '').split('\n').forEach((para, src) => {
+    const m = para.match(CHECK_RE), check = m ? m[1] !== ' ' : null, body = m ? para.slice(m[0].length) : para;
+    const indent = m ? box + 8 : 0;
+    wrap(mctx, body, it.w - 24 - indent).forEach((t, k) => { lines.push({ text: t, x: it.x + 12 + indent, y, check: k === 0 ? check : null, src, cont: m && k > 0 }); y += lh; });
+  });
+  const footer = (it.tags && it.tags.length) || it.due ? NOTE_FOOTER : 0;
+  return { lines, fs, lh, box, footer, font };
+}
+// Returns the paragraph index of a checklist box at (x, y) on a note, or -1.
+export function noteCheckAt(it, x, y) {
+  const L = noteLayout(it);
+  for (const l of L.lines) if (l.check !== null && x >= it.x + 4 && x <= it.x + 20 + L.box && y >= l.y - 4 && y <= l.y + L.lh) return l.src;
+  return -1;
+}
+export function toggleCheck(text, src) {
+  const paras = String(text || '').split('\n'); const m = paras[src] && paras[src].match(CHECK_RE); if (!m) return text;
+  paras[src] = (m[1] === ' ' ? '[x] ' : '[ ] ') + paras[src].slice(m[0].length); return paras.join('\n');
+}
+const TAG_COLORS = ['#1e88e5', '#8e24aa', '#43a047', '#e53935', '#fb8c00', '#00897b', '#6d4c41', '#3949ab'];
+export const tagColor = (t) => { let h = 0; for (const c of String(t)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return TAG_COLORS[h % TAG_COLORS.length]; };
+export function dueState(due, now = new Date()) {
+  if (!due) return null;
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return due < today ? 'overdue' : due === today ? 'today' : 'later';
+}
+export function fmtDue(due) {
+  const [y, m, d] = String(due).split('-').map(Number); if (!y || !m || !d) return String(due);
+  return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]}`;
 }
 let mctx = null;
 function measure(s, font) {
@@ -97,9 +175,11 @@ export function hit(it, x, y, tol) {
     return false;
   }
   if (it.type === 'line' || it.type === 'arrow') return distSeg(x, y, it.x1, it.y1, it.x2, it.y2) <= (it.size || 2) / 2 + tol;
+  if (it.type === 'frame') return x >= it.x - tol && x <= it.x + it.w + tol && y >= it.y - tol && y <= it.y + FRAME_HEAD; // frames are grabbed by their title bar
   const b = bounds(it);
   return x >= b.x - tol && x <= b.x + b.w + tol && y >= b.y - tol && y <= b.y + b.h + tol;
 }
+export function frameToggleRect(it) { return { x: it.x + it.w - 46, y: it.y, w: 46, h: FRAME_HEAD }; }
 export function linkOpenRect(it) { return { x: it.x + it.w - 86, y: it.y + it.h - 38, w: 76, h: 30 }; }
 
 export function moveItem(it, dx, dy) {
@@ -126,6 +206,7 @@ export function drawBackground(ctx, bg, view, w, h, tc) {
   }
 }
 
+function lineDone(lines, l) { for (let i = lines.indexOf(l); i >= 0; i--) if (lines[i].check !== null) return lines[i].check === true; return false; }
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
@@ -194,12 +275,45 @@ export function drawItem(ctx, it, env) {
       ctx.shadowColor = 'rgba(0,0,0,0.18)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
       ctx.fillStyle = it.color || NOTE_COLORS[0]; ctx.fillRect(it.x, it.y, it.w, it.h);
       ctx.shadowColor = 'transparent';
+      const L = noteLayout(it), ink = noteTextColor(it);
       if (env.editingId !== it.id) {
-        const fs = it.fontSize || 20; ctx.fillStyle = noteTextColor(it); ctx.font = fontStr(it, fs); ctx.textBaseline = 'top';
-        ctx.beginPath(); ctx.rect(it.x, it.y, it.w, it.h); ctx.clip();
-        wrap(ctx, it.text || '', it.w - 24).forEach((l, i) => ctx.fillText(l, it.x + 12, it.y + 12 + i * fs * 1.25));
+        ctx.save(); ctx.beginPath(); ctx.rect(it.x, it.y, it.w, it.h - L.footer); ctx.clip();
+        ctx.font = L.font; ctx.textBaseline = 'top';
+        for (const l of L.lines) {
+          if (l.check !== null) {
+            const bx = it.x + 12, by = l.y + (L.lh - L.box) / 2 - 1;
+            ctx.strokeStyle = ink; ctx.lineWidth = Math.max(1.5, L.fs / 12); ctx.strokeRect(bx, by, L.box, L.box);
+            if (l.check) { ctx.beginPath(); ctx.moveTo(bx + L.box * 0.2, by + L.box * 0.55); ctx.lineTo(bx + L.box * 0.42, by + L.box * 0.78); ctx.lineTo(bx + L.box * 0.82, by + L.box * 0.22); ctx.stroke(); }
+          }
+          const done = l.check === true || (l.cont && lineDone(L.lines, l));
+          ctx.fillStyle = ink; ctx.globalAlpha = done ? 0.5 : 1; ctx.fillText(l.text, l.x, l.y);
+          if (done && l.text) { const w = ctx.measureText(l.text).width; ctx.fillRect(l.x, l.y + L.fs * 0.55, w, Math.max(1, L.fs / 14)); }
+          ctx.globalAlpha = 1;
+        }
+        ctx.restore();
+      }
+      if (L.footer) { // tags + due date chips
+        let x = it.x + 8; const y = it.y + it.h - L.footer + 6, hh = L.footer - 12;
+        ctx.font = `600 13px ${FONT}`; ctx.textBaseline = 'middle';
+        const chip = (label, bg, fg = '#fff') => { const w = ctx.measureText(label).width + 14; if (x + w > it.x + it.w - 6) return; roundRect(ctx, x, y, w, hh, hh / 2); ctx.fillStyle = bg; ctx.fill(); ctx.fillStyle = fg; ctx.fillText(label, x + 7, y + hh / 2 + 1); x += w + 5; };
+        if (it.due) { const st = dueState(it.due); chip('⏰ ' + fmtDue(it.due), st === 'overdue' ? '#d93025' : st === 'today' ? '#f57c00' : 'rgba(0,0,0,0.55)'); }
+        for (const t of it.tags || []) chip('#' + t, tagColor(t));
       }
       ctx.restore(); break;
+    }
+    case 'frame': {
+      const c = it.color || FRAME_COLORS[0], hd = FRAME_HEAD;
+      ctx.save();
+      ctx.globalAlpha = 0.28; ctx.fillStyle = c; ctx.fillRect(it.x, it.y, it.w, it.collapsed ? hd : it.h);
+      ctx.globalAlpha = 0.75; ctx.fillRect(it.x, it.y, it.w, hd); ctx.globalAlpha = 1;
+      ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.strokeRect(it.x, it.y, it.w, it.collapsed ? hd : it.h);
+      ctx.fillStyle = '#1d1d1f'; ctx.font = `bold 20px ${FONT}`; ctx.textBaseline = 'middle';
+      const label = (it.title || 'Frame') + (it.collapsed ? `  ·  ${env.hiddenCount ? env.hiddenCount(it) : ''} hidden` : '');
+      ctx.save(); ctx.beginPath(); ctx.rect(it.x, it.y, it.w - 48, hd); ctx.clip(); ctx.fillText(label, it.x + 14, it.y + hd / 2 + 1); ctx.restore();
+      const t = frameToggleRect(it), cx = t.x + t.w / 2, cy = t.y + t.h / 2; // ▾ / ▸ collapse chevron
+      ctx.strokeStyle = '#1d1d1f'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.beginPath();
+      if (it.collapsed) { ctx.moveTo(cx - 4, cy - 7); ctx.lineTo(cx + 4, cy); ctx.lineTo(cx - 4, cy + 7); } else { ctx.moveTo(cx - 7, cy - 4); ctx.lineTo(cx, cy + 4); ctx.lineTo(cx + 7, cy - 4); }
+      ctx.stroke(); ctx.restore(); break;
     }
     case 'image': {
       const img = env.getImage ? env.getImage(it) : null;
@@ -240,10 +354,14 @@ export function drawBoard(ctx, board, view, w, h, env) {
   drawBackground(ctx, board.background || 'grid', view, w, h, env.tc);
   ctx.save(); ctx.translate(view.x, view.y); ctx.scale(view.scale, view.scale);
   const vx = -view.x / view.scale, vy = -view.y / view.scale, vw = w / view.scale, vh = h / view.scale;
-  for (const it of board.items) {
+  updateConnectors(board.items);
+  const hidden = hiddenIds(board.items);
+  const e2 = { ...env, hiddenCount: (f) => frameContents(board.items, f).length };
+  for (const it of drawOrder(board.items)) {
+    if (hidden.has(it.id)) continue;
     const b = bounds(it);
     if (b.x > vx + vw || b.y > vy + vh || b.x + b.w < vx || b.y + b.h < vy) continue; // cull
-    drawItem(ctx, it, env);
+    drawItem(ctx, it, e2);
   }
   ctx.restore();
 }

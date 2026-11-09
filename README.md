@@ -91,8 +91,8 @@ A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt 
 
 * **Open:** go to the URL. On a new device, tap **Sign in with Google** once; your boards then download from Drive.
 * **Install:** on iPhone, open Safari › Share › *Add to Home Screen*. On Android/Chrome, use ⋮ › *Install app*. On desktop Chrome/Edge, click the install icon in the address bar.
-* **Tools (bottom bar):** Select/move · Pen · Highlighter · Eraser (removes whole strokes/shapes) · Shapes (tap again to pick rectangle, ellipse, line or arrow) · Text · Sticky note (tap again to pick its colour) · **+** Insert (upload a picture, picture from URL, link a document) · Colour & thickness.
-* **Selecting an item** shows a small action bar: colour, text format (Aa), edit, open/preview (links), multi-select, group/ungroup, lock, duplicate, bring to front, send to back, delete. Drag an item to move it; drag the round handle to resize it.
+* **Tools (bottom bar):** Select/move · Pen · Highlighter · Eraser (removes whole strokes/shapes) · Shapes (tap again to pick rectangle, ellipse, line or arrow) · Text · Sticky note (tap again to pick its colour) · **+** Insert (upload a picture, picture from URL, link a document, frame / section, sticky note) · Colour & thickness.
+* **Selecting an item** shows a small action bar: colour, text format (Aa), edit, tags/due date/checklist (notes), open/preview (links), frame options, multi-select, connect, align, put in a frame, group/ungroup, lock, duplicate, layers, delete. On a phone the bar wraps onto two rows. Drag an item to move it; drag the round handle to resize it.
 * **Touch:** use one finger to draw or move. Use two fingers to pan and zoom. With the Select tool, dragging empty space pans. Double-tap a note to edit it.
 * **Desktop:** the mouse wheel pans and Ctrl+wheel zooms. Space+drag also pans. Shortcuts: V P H E S T N, Ctrl+Z, Ctrl+Shift+Z, Delete, Ctrl+F, Ctrl+A (select all unlocked), Ctrl+G / Ctrl+Shift+G (group/ungroup), Ctrl+L (lock/unlock), Ctrl+B / Ctrl+I (bold/italic) and Esc (clear selection). You can paste pictures, links or text, and drag and drop picture files.
 * **Links and documents:** + › *Link a document* lets you paste any Google Doc, Sheet or Slides link, Drive file link or web page. You can also choose a file from `Whiteboard/documents` or upload one there. The card's **Open ↗** button opens the original, and **Preview** embeds it while you're online.
@@ -117,6 +117,35 @@ A board file contains `{ id, name, background, items[], imageFiles{}, updatedAt 
 
 **Format text** (free text and sticky notes)
 * Select the text or note(s) › tap **Aa**: size **S / M / L / XL** (or A− / A+ for fine steps), **B** bold, *I* italic, and a text colour (for notes, "ink" is the default dark text). Works on several items or a group at once (desktop: Ctrl+B / Ctrl+I). Formatting shows in PNG/PDF exports, and every change can be undone.
+
+### Connectors, Kanban notes, frames, arranging & layers
+
+**Connectors (arrows that stay attached)**
+* Pick the Arrow (or Line) shape and drag from one note/shape to another: both ends attach and follow the items when you move them.
+* *Phone:* Select › tap again › Multi-select › tap two items › **Connect** (the boxes-and-arrow button). *Desktop:* Shift-click two items › **Connect**.
+* Select an arrow and drag one of its round end handles to re-attach it to another item, or into empty space to detach that end.
+
+**Kanban-friendly notes**
+* **Snap into columns:** drop a sticky note on a column (a tall, narrow rectangle or frame, like the Kanban template's columns): it centres itself in the column below the header and stacks under the notes already there instead of overlapping them. To turn it off, use ⋯ › *Snap notes into columns*.
+* **Tags & due date:** select note(s) › tag button › type tags (comma-separated) and pick a due date (or tap Today / Tomorrow / +1 week) › **Save**. They show as chips at the bottom of the note: the due date turns orange on the day and red when overdue. Search also finds tags.
+* **Checklists:** start a line in a note with `[ ] ` (or use tag button › **☑ Add checklist item**). Tap the box to tick it (`[x]`); ticked lines are struck through.
+
+**Frames / sections**
+* **+ › Frame / section** adds a named area, or select items › **Frame** button to wrap them. Drag a frame by its title bar and everything inside moves with it. Tapping or dragging inside a frame's empty area pans as usual.
+* In the action bar: rename (or double-click the title), change the colour, collapse/expand (or tap the ▾/▸ at the right of the title bar). Collapsing hides the frame's contents, and the frame shows how many items are hidden.
+* **Jump:** the frames button (bottom-right, next to the mini-map) lists the frames (ordered top-to-bottom, then left-to-right). Tap one to jump to it.
+* **Mini-map:** the map button (bottom-right) shows the whole board with your current view. Tap or drag on it to move around.
+* **Present mode:** frames button › *Present from the start* (or ⋯ › *Present frames*, or select a frame › ▶). Each frame fills the screen like a slide. *Phone:* swipe left/right or tap ◀ ▶, then ✕ to leave. *Desktop:* arrow keys / Space / Page Up/Down, Esc to leave.
+
+**Align, distribute & snap to grid**
+* Select 2+ items › **Align**: left, centre, right, top, middle or bottom. With 3+ items you can also **distribute** them evenly across or down. Groups count as one unit.
+* ⋯ › **Snap to grid** (per device): moved items, new notes and new shapes land on a 20-px grid.
+
+**Layers & background**
+* Select › **Layers** button: bring to front, bring forward, send backward, send to back (desktop: Ctrl+] / Ctrl+[, add Shift for front/back).
+* **Move to background layer** puts an item (e.g. a big picture, a coloured area or a diagram) beneath everything else. Then use **Lock background layer** (in the same menu or in ⋯) so you can't move it by accident: dragging on it pans, and notes move freely on top. ⋯ › *Unlock background layer* (or *Unlock all*) releases it.
+
+All of these can be undone, are saved in the board JSON and sync to your other devices. Older boards open unchanged.
 
 ## 6. Offline and sync behaviour
 
@@ -153,7 +182,7 @@ Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in htt
 
 ## 10. Known limits (v1)
 
-* Box-select is a rectangle (no free-form lasso). A multi-selection or group resizes uniformly from its top-left corner.
+* Box-select is a rectangle (no free-form lasso). Connectors are straight (no elbow or curved routing). A multi-selection or group resizes uniformly from its top-left corner.
 * The eraser removes whole strokes and shapes rather than partial pixels.
 * Some websites refuse to be shown in the Preview frame; **Open ↗** always works.
 * Pictures added by URL from sites that block cross-site access can't be included in PNG/PDF exports. Upload them instead.
@@ -162,6 +191,7 @@ Edit the files, bump `VERSION` in `sw.js`, then commit and push to `main` in htt
 ## 11. How it was tested
 
 These automated browser tests ran in headless Chrome with real touch events, with the app served under a `/my-whiteboard/` sub-path as on GitHub Pages:
+* **Connectors, Kanban notes, frames, arrange & layers (desktop + 390 px phone):** arrows attach and follow notes, end handles detach and re-attach, Connect button, duplicated arrows stay wired to the copies, column snapping (centring, stacking, on/off), tags and due dates, checklist ticking, search by tag, PNG export, frames carry their contents, collapse/expand, put in a frame, mini-map jump, present mode (keys, buttons, swipe), align and distribute, snap to grid, layer order, background layer and its lock, undo for every action, persistence through Drive sync, and older boards.
 * **Lock, group & text format (desktop + 390 px phone):** Shift-click and box-select, phone multi-select mode, group move/resize, lock/unlock (incl. long-press on phone and *Unlock all*), locked items can't be moved, erased or deleted, Ctrl+A/G/L/B/I, text size/colour/bold/italic, undo/redo of every action, persistence through Drive sync and reload, PNG/PDF export, the Kanban template, and older boards without the new fields.
 * **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.
 * **Offline cycle with a simulated Drive:** the app reloads while offline, offline edits survive, it syncs on reconnect, remote changes are pulled, both conflict directions are handled, versions are pruned to 5 and restore works, deletions sync, and a "new device" first run downloads boards and pictures.

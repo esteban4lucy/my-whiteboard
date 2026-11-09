@@ -42,6 +42,15 @@
     <button id="zoomPct" class="zoom-pct" title="Reset to 100%">100%</button>
     <button id="zoomIn" class="tool" aria-label="Zoom in"></button>
     <button id="zoomFit" class="tool" aria-label="Fit board to screen" title="Fit to screen"></button>
+    <button id="btnMap" class="tool" aria-label="Mini-map" title="Mini-map"></button>
+    <button id="btnFrames" class="tool" aria-label="Frames and present" title="Frames & present"></button>
+  </div>
+  <div id="minimap" class="minimap" hidden><canvas id="miniCanvas" aria-label="Mini-map: tap or drag to move around the board"></canvas></div>
+  <div id="presentBar" class="present-bar" hidden>
+    <button id="presPrev" class="tool" aria-label="Previous frame">◀</button>
+    <span id="presLabel"></span>
+    <button id="presNext" class="tool" aria-label="Next frame">▶</button>
+    <button id="presExit" class="tool" aria-label="Leave present mode">✕</button>
   </div>
   <nav id="toolbar" class="toolbar" aria-label="Tools"></nav>
 

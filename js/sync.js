@@ -3,7 +3,7 @@
 // (the Drive modifiedTime we last saw), updatedAt (local edit time, used for last-write-wins).
 import { db, kv } from './db.js';
 
-const boardPayload = (b, imageFiles) => ({ app: 'my-whiteboard', schema: 1, id: b.id, name: b.name, background: b.background, createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items, ...(imageFiles ? { imageFiles } : {}) });
+const boardPayload = (b, imageFiles) => ({ app: 'my-whiteboard', schema: 1, id: b.id, name: b.name, background: b.background, ...(b.bgLocked ? { bgLocked: true } : {}), createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items, ...(imageFiles ? { imageFiles } : {}) });
 // Map of uploaded pictures used by a board: { blobKey: driveFileId } (lets other devices download them).
 async function imageMap(b) {
   const out = {};
@@ -84,7 +84,7 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
 
   async function applyRemote(local, remoteMeta, data) {
     const rec = {
-      ...(local || {}), id: data.id, name: data.name, background: data.background || 'grid', items: data.items || [],
+      ...(local || {}), id: data.id, name: data.name, background: data.background || 'grid', bgLocked: data.bgLocked ? true : undefined, items: data.items || [],
       createdAt: data.createdAt || Date.now(), updatedAt: data.updatedAt || Date.now(),
       dirty: false, deleted: false, driveFileId: remoteMeta.id, driveModifiedTime: remoteMeta.modifiedTime,
     };
@@ -180,7 +180,7 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
     const known = new Set(locals.map((t) => t.driveFileId).filter(Boolean));
     const remoteIds = new Set(remote.map((r) => r.id));
     for (const t of locals) {
-      const payload = { app: 'my-whiteboard', kind: 'template', id: t.id, name: t.name, background: t.background, items: t.items };
+      const payload = { app: 'my-whiteboard', kind: 'template', id: t.id, name: t.name, background: t.background, ...(t.bgLocked ? { bgLocked: true } : {}), items: t.items };
       if (t.deleted) { if (t.driveFileId && remoteIds.has(t.driveFileId)) await adapter.trash(t.driveFileId); await db.del('templates', t.id); continue; }
       if (!t.driveFileId) { const res = await adapter.createFile('templates', `${safeName(t.name)}.template.json`, payload, 'application/json', { templateId: t.id }); t.driveFileId = res.id; t.dirty = false; await db.put('templates', t); continue; }
       if (!remoteIds.has(t.driveFileId)) { if (!t.dirty) await db.del('templates', t.id); continue; }
@@ -191,7 +191,7 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
       try {
         const d = await adapter.readJSON(r.id);
         if (!Array.isArray(d.items)) continue;
-        await db.put('templates', { id: d.id || r.id, name: d.name || r.name.replace(/\.(template\.)?json$/, ''), background: d.background || 'grid', items: d.items, driveFileId: r.id, dirty: false });
+        await db.put('templates', { id: d.id || r.id, name: d.name || r.name.replace(/\.(template\.)?json$/, ''), background: d.background || 'grid', bgLocked: d.bgLocked ? true : undefined, items: d.items, driveFileId: r.id, dirty: false });
       } catch { /* skip non-template files */ }
     }
   }

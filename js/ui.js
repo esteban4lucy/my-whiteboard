@@ -14,6 +14,16 @@ export function h(tag, attrs = {}, ...kids) {
 const P = (d) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 export const ICONS = {
   menu: P('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  tag: P('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>'),
+  frame: P('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18"/>'),
+  collapse: P('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 11l4 4 4-4"/>'),
+  expand: P('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M10 8l4 4-4 4"/>'),
+  present: P('<rect x="3" y="4" width="18" height="12" rx="1"/><path d="M10 7.5v5l4-2.5z" fill="currentColor"/><path d="M12 16v4M8 20h8"/>'),
+  connect: P('<rect x="2" y="3" width="7" height="6" rx="1"/><rect x="15" y="15" width="7" height="6" rx="1"/><path d="M9 6h4a2 2 0 012 2v7"/><path d="M12.5 12.5L15 15l2.5-2.5"/>'),
+  align: P('<path d="M4 3v18"/><rect x="7" y="6" width="12" height="4" rx="1"/><rect x="7" y="14" width="7" height="4" rx="1"/>'),
+  layers: P('<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>'),
+  map: P('<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>'),
+  grid: P('<path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>'),
   select: P('<path d="M5 3l14 8-6 2-3 6z"/>'),
   pen: P('<path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/>'),
   highlighter: P('<path d="M9 14l-4 4v2h6l2-2"/><path d="M9 14l7-9 4 4-9 7z"/><path d="M3 22h18" opacity=".5"/>'),

@@ -8,5 +8,6 @@ Requires Node 18+ and Chrome. From the folder that CONTAINS `my-whiteboard/`:
     node touch.mjs         # phone: touch drawing, pinch/pan, notes, new-device first run
     node realadapter.mjs   # real drive.js against an emulated Drive v3 REST API + fake Google sign-in
     node features.mjs      # lock/unlock, multi-select, group, text formatting, Kanban (desktop + 390px phone)
+    node features2.mjs     # connectors, Kanban notes, frames/mini-map/present, align/grid, layers (desktop + 390px phone)
 
 Edit `executablePath` in the scripts if Chrome is not at /usr/bin/google-chrome.

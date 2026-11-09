@@ -83,7 +83,7 @@ function render() {
   const e = env();
   R.drawBoard(ctx, S.board, S.view, W, H, e);
   ctx.save(); ctx.translate(S.view.x, S.view.y); ctx.scale(S.view.scale, S.view.scale);
-  if (G && G.draft) R.drawItem(ctx, G.draft, e);
+  if (G && G.draft) { if (G.draft.from) R.updateConnectors([...S.board.items, G.draft]); R.drawItem(ctx, G.draft, e); }
   if (G && G.type === 'marquee') {
     ctx.fillStyle = 'rgba(37,99,235,0.08)'; ctx.strokeStyle = e.tc.sel; ctx.lineWidth = 1.5 / S.view.scale; ctx.setLineDash([5 / S.view.scale, 4 / S.view.scale]);
     const x = Math.min(G.p0.x, G.cur.x), y = Math.min(G.p0.y, G.cur.y), w = Math.abs(G.cur.x - G.p0.x), hh = Math.abs(G.cur.y - G.p0.y);
@@ -96,7 +96,7 @@ function render() {
     if (sel.length > 1) { ctx.globalAlpha = 0.45; for (const it of sel) { const b = R.bounds(it); ctx.strokeRect(b.x - pad / 2, b.y - pad / 2, b.w + pad, b.h + pad); } ctx.globalAlpha = 1; }
     const b = R.boardBounds(sel);
     ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2); ctx.setLineDash([]);
-    if (sel.some((i) => i.locked)) drawLockBadge(ctx, b.x + b.w + pad, b.y - pad, k, e.tc.sel);
+    if (sel.some(isLocked)) drawLockBadge(ctx, b.x + b.w + pad, b.y - pad, k, e.tc.sel);
     else for (const hd of handles(sel)) {
       const s = HANDLE * k;
       ctx.fillStyle = '#fff'; ctx.strokeStyle = e.tc.sel; ctx.lineWidth = 2 * k;
@@ -106,6 +106,7 @@ function render() {
   ctx.restore();
   $('#zoomPct').textContent = Math.round(S.view.scale * 100) + '%';
   positionCtxBar();
+  if (PREF.map && !P.on) drawMinimap();
 }
 function drawLockBadge(c, x, y, k, color) { // small padlock shown on selected locked items
   const r = 13 * k;
@@ -144,6 +145,14 @@ function saveViewSoon() { clearTimeout(viewT); viewT = setTimeout(() => S.board 
 
 // ---------- model ----------
 const byId = (id) => (S.board ? S.board.items.find((i) => i.id === id) : null);
+// Locked = locked itself, or on the background layer while the background is locked.
+const isLocked = (it) => !!it.locked || (it.layer === 'bg' && !!(S.board && S.board.bgLocked));
+// Per-device arrange preferences.
+const GRID = 20;
+const PREF = { grid: localStorage.getItem('wb-snap-grid') === '1', cols: localStorage.getItem('wb-snap-cols') !== '0', map: localStorage.getItem('wb-minimap') === '1' };
+const snapV = (v) => (PREF.grid ? Math.round(v / GRID) * GRID : v);
+const CONN_TYPES = ['line', 'arrow'];
+const attachAt = (w, exclude = null) => topHit(w, (x) => !CONN_TYPES.includes(x.type) && x.type !== 'stroke' && x !== exclude, true);
 // Selection = list of item ids; selecting one member of a group selects the whole group.
 function expandGroups(ids) {
   const set = new Set(ids);
@@ -155,10 +164,10 @@ function setSel(ids) { S.sel = S.board ? expandGroups(ids).filter((id) => byId(i
 const selItems = () => (S.board ? S.board.items.filter((i) => S.sel.includes(i.id)) : []);
 const selItem = () => { const a = selItems(); return a.length === 1 ? a[0] : null; };
 const isGroupSel = () => { const a = selItems(); return a.length > 1 && !!a[0].groupId && a.every((i) => i.groupId === a[0].groupId); };
-const snap = () => JSON.stringify({ items: S.board.items, background: S.board.background });
+const snap = () => JSON.stringify({ items: S.board.items, background: S.board.background, bgLocked: !!S.board.bgLocked });
 function pushUndo(s) { S.undo.push(s); if (S.undo.length > 100) S.undo.shift(); S.redo = []; updateUndoBtns(); }
 function commit(fn) { const s = snap(); fn(); if (snap() !== s) { pushUndo(s); save(); } requestRender(); }
-function restore(s) { const d = JSON.parse(s); S.board.items = d.items; S.board.background = d.background; S.sel = S.sel.filter((id) => byId(id)); save(); requestRender(); showCtxBar(); }
+function restore(s) { const d = JSON.parse(s); S.board.items = d.items; S.board.background = d.background; if (d.bgLocked) S.board.bgLocked = true; else delete S.board.bgLocked; S.sel = S.sel.filter((id) => byId(id)); save(); requestRender(); showCtxBar(); }
 function undo() { if (!S.undo.length) return; finishEdit(); const cur = snap(); restore(S.undo.pop()); S.redo.push(cur); updateUndoBtns(); }
 function redo() { if (!S.redo.length) return; finishEdit(); const cur = snap(); restore(S.redo.pop()); S.undo.push(cur); updateUndoBtns(); }
 function updateUndoBtns() { $('#btnUndo').disabled = !S.undo.length; $('#btnRedo').disabled = !S.redo.length; }
@@ -182,10 +191,10 @@ async function refreshPending() {
 
 function newBoardFrom(tpl, name) {
   const fresh = JSON.parse(JSON.stringify(tpl.items || []));
-  const gmap = new Map();
-  for (const it of fresh) { it.id = uid('i-'); if (it.groupId) { if (!gmap.has(it.groupId)) gmap.set(it.groupId, uid('g-')); it.groupId = gmap.get(it.groupId); } }
+  const gmap = new Map(), idmap = new Map(fresh.map((i) => [i.id, uid('i-')]));
+  for (const it of fresh) { it.id = idmap.get(it.id); for (const k of ['from', 'to']) if (it[k]) { if (idmap.has(it[k])) it[k] = idmap.get(it[k]); else delete it[k]; } if (it.groupId) { if (!gmap.has(it.groupId)) gmap.set(it.groupId, uid('g-')); it.groupId = gmap.get(it.groupId); } }
   const now = Date.now();
-  return { id: uid('b-'), name: name || tpl.name, background: tpl.background || 'grid', items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
+  return { id: uid('b-'), name: name || tpl.name, background: tpl.background || 'grid', ...(tpl.bgLocked ? { bgLocked: true } : {}), items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
 }
 async function createBoard(tpl, name) {
   const b = newBoardFrom(tpl, name);
@@ -227,15 +236,16 @@ const pt = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clie
 const tol = () => 10 / S.view.scale;
 // Locked items are skipped unless allowLocked (long-press to reach them).
 function topHit(w, filter = () => true, allowLocked = false) {
-  for (let i = S.board.items.length - 1; i >= 0; i--) {
-    const it = S.board.items[i];
-    if ((it.locked && !allowLocked) || !filter(it)) continue;
+  const order = R.drawOrder(S.board.items), hid = R.hiddenIds(S.board.items);
+  for (let i = order.length - 1; i >= 0; i--) {
+    const it = order[i];
+    if (hid.has(it.id) || (isLocked(it) && !allowLocked) || !filter(it)) continue;
     if (R.hit(it, w.x, w.y, tol())) return it;
   }
   return null;
 }
 function handleHit(w) {
-  const sel = selItems(); if (!sel.length || sel.some((i) => i.locked)) return null;
+  const sel = selItems(); if (!sel.length || sel.some(isLocked)) return null;
   if (sel.length === 1) {
     const it = sel[0];
     if (it.type !== 'line' && it.type !== 'arrow' && it.type !== 'stroke') { // presses inside the item act on the item (e.g. a link's Open button)
@@ -249,6 +259,7 @@ const LONG_PRESS_MS = 550;
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 2) return;
+  if (P.on) { e.preventDefault(); P.down = pt(e); return; }
   e.preventDefault(); // keep focus in the text editor; suppress emulated mouse events
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, pt(e));
@@ -271,16 +282,24 @@ canvas.addEventListener('pointerdown', (e) => {
       break;
     }
     case 'eraser': G = { type: 'erase', snap: snap(), removed: 0 }; eraseAt(w); break;
-    case 'shape': G = { type: 'shape', p0: w, draft: { id: uid('i-'), type: S.shape, x1: w.x, y1: w.y, x2: w.x, y2: w.y, color: S.color, size: Math.max(2, S.size) } }; break;
+    case 'shape': {
+      const a = CONN_TYPES.includes(S.shape) ? attachAt(w) : null; // start an arrow/line on an item = attached connector
+      const x = a ? w.x : snapV(w.x), y = a ? w.y : snapV(w.y);
+      G = { type: 'shape', p0: { x, y }, draft: { id: uid('i-'), type: S.shape, x1: x, y1: y, x2: x, y2: y, color: S.color, size: Math.max(2, S.size), ...(a ? { from: a.id } : {}) } }; break;
+    }
     case 'text': { const before = snap(); const it = { id: uid('i-'), type: 'text', x: w.x, y: w.y - 14, text: '', fontSize: 28, color: S.color }; S.board.items.push(it); setTool('select'); setSel([it.id]); startEdit(it, true, before); G = null; break; }
     case 'note': {
-      const it = { id: uid('i-'), type: 'note', x: w.x - 100, y: w.y - 80, w: 200, h: 160, text: '', color: S.noteColor, fontSize: 20 };
+      const it = { id: uid('i-'), type: 'note', x: snapV(w.x - 100), y: snapV(w.y - 80), w: 200, h: 160, text: '', color: S.noteColor, fontSize: 20 };
       commit(() => S.board.items.push(it)); setTool('select'); setSel([it.id]); startEdit(it, false); G = null; break;
     }
     default: { // select
       const additive = e.shiftKey || e.ctrlKey || e.metaKey || S.multiMode;
       const hk = handleHit(w);
-      if (hk) { const sel = selItems(); G = { type: 'resize', k: hk, snap: snap(), w0: w, orig: sel.map((i) => JSON.parse(JSON.stringify(i))), ob: R.boardBounds(sel) }; break; }
+      if (hk) {
+        const sel = selItems(); G = { type: 'resize', k: hk, snap: snap(), w0: w, orig: sel.map((i) => JSON.parse(JSON.stringify(i))), ob: R.boardBounds(sel) };
+        if (hk === 'p1') delete sel[0].from; if (hk === 'p2') delete sel[0].to; // dragging an end detaches it (re-attaches on drop over an item)
+        break;
+      }
       const it = topHit(w);
       if (it) {
         let removeOnTap = null;
@@ -290,13 +309,13 @@ canvas.addEventListener('pointerdown', (e) => {
         } else if (!S.sel.includes(it.id)) setSel([it.id]);
         let openLink = false;
         if (it.type === 'link' && S.sel.length === 1) { const o = R.linkOpenRect(it); openLink = w.x >= o.x && w.x <= o.x + o.w && w.y >= o.y && w.y <= o.y + o.h; }
-        G = { type: 'move', ids: [...S.sel], tapId: it.id, last: w, p0: p, moved: false, snap: snap(), openLink, removeOnTap };
+        G = { type: 'move', ids: [...S.sel], tapId: it.id, w0: w, p0: p, moved: false, snap: snap(), openLink, removeOnTap };
       } else if (additive) {
         G = { type: 'marquee', p0: w, cur: w, base: [...S.sel] };
       } else {
         setSel([]);
         G = { type: 'pan', p0: p, v0: { ...S.view } };
-        const lockedIt = topHit(w, (x) => x.locked, true);
+        const lockedIt = topHit(w, isLocked, true);
         if (lockedIt) { // long-press a locked item to select it (then Unlock)
           const g = G;
           g.lp = setTimeout(() => {
@@ -341,14 +360,18 @@ canvas.addEventListener('pointermove', (e) => {
     case 'shape': {
       let x2 = w.x, y2 = w.y;
       if (e.shiftKey && (S.shape === 'rect' || S.shape === 'ellipse')) { const s = Math.max(Math.abs(x2 - G.p0.x), Math.abs(y2 - G.p0.y)); x2 = G.p0.x + Math.sign(x2 - G.p0.x || 1) * s; y2 = G.p0.y + Math.sign(y2 - G.p0.y || 1) * s; }
+      if (!(CONN_TYPES.includes(S.shape) && attachAt(w))) { x2 = snapV(x2); y2 = snapV(y2); }
       G.draft.x2 = x2; G.draft.y2 = y2; requestRender(); break;
     }
     case 'move': {
       if (!G.moved && Math.hypot(p.x - G.p0.x, p.y - G.p0.y) < 6) return;
+      if (!G.moved) prepMove(G);
       G.moved = true;
-      const dx = w.x - G.last.x, dy = w.y - G.last.y;
-      for (const id of G.ids) { const it = byId(id); if (it && !it.locked) R.moveItem(it, dx, dy); }
-      G.last = w; requestRender();
+      let dx = w.x - G.w0.x, dy = w.y - G.w0.y;
+      if (PREF.grid) { dx = Math.round((G.ob.x + dx) / GRID) * GRID - G.ob.x; dy = Math.round((G.ob.y + dy) / GRID) * GRID - G.ob.y; }
+      const ddx = dx - G.applied.x, ddy = dy - G.applied.y; G.applied = { x: dx, y: dy };
+      if (ddx || ddy) for (const id of G.ids) { const it = byId(id); if (it && !isLocked(it)) R.moveItem(it, ddx, ddy); }
+      requestRender();
       break;
     }
     case 'resize': {
@@ -368,13 +391,15 @@ canvas.addEventListener('pointermove', (e) => {
         const ob = R.bounds(o); it.fontSize = Math.max(8, Math.round(o.fontSize * Math.max(0.2, (ob.w + dx) / ob.w)));
       } else if (it.type === 'image') {
         const ratio = o.h / o.w; it.w = Math.max(30, o.w + dx); it.h = e.shiftKey ? Math.max(30, o.h + dy) : it.w * ratio;
-      } else { it.w = Math.max(it.type === 'link' ? 200 : 60, o.w + dx); it.h = Math.max(it.type === 'link' ? 100 : 60, o.h + dy); }
+      } else { it.w = Math.max(it.type === 'link' ? 200 : it.type === 'frame' ? 160 : 60, snapV(o.x + o.w + dx) - o.x); it.h = Math.max(it.type === 'link' ? 100 : it.type === 'frame' ? 100 : 60, snapV(o.y + o.h + dy) - o.y); }
+      if (it.type === 'rect' || it.type === 'ellipse') { if (o.x2 >= o.x1) it.x2 = snapV(it.x2); else it.x1 = snapV(it.x1); if (o.y2 >= o.y1) it.y2 = snapV(it.y2); else it.y1 = snapV(it.y1); }
       requestRender(); break;
     }
   }
 });
 
 function endPointer(e) {
+  if (P.on) { presentPointerUp(e); return; }
   if (!pointers.has(e.pointerId)) return;
   pointers.delete(e.pointerId);
   if (G && G.type === 'pinch') { if (pointers.size === 0) G = null; return; }
@@ -385,14 +410,16 @@ function endPointer(e) {
     case 'draw': if (g.draft.points.length) commit(() => S.board.items.push(g.draft)); break;
     case 'shape': {
       const d = g.draft;
-      if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) > 4 / S.view.scale) { commit(() => S.board.items.push(d)); }
+      if (CONN_TYPES.includes(d.type)) { const b = attachAt({ x: d.x2, y: d.y2 }); if (b && b.id !== d.from) d.to = b.id; }
+      if (Math.hypot(d.x2 - g.p0.x, d.y2 - g.p0.y) > 4 / S.view.scale) { commit(() => S.board.items.push(d)); }
       requestRender(); break;
     }
     case 'erase': if (g.removed) { pushUndo(g.snap); save(); } break;
     case 'marquee': {
       const x1 = Math.min(g.p0.x, g.cur.x), y1 = Math.min(g.p0.y, g.cur.y), x2 = Math.max(g.p0.x, g.cur.x), y2 = Math.max(g.p0.y, g.cur.y);
       if (x2 - x1 > 3 / S.view.scale || y2 - y1 > 3 / S.view.scale) {
-        const hits = S.board.items.filter((it) => { if (it.locked) return false; const b = R.bounds(it); return b.x < x2 && b.x + b.w > x1 && b.y < y2 && b.y + b.h > y1; }).map((i) => i.id);
+        const hid = R.hiddenIds(S.board.items);
+        const hits = S.board.items.filter((it) => { if (isLocked(it) || hid.has(it.id)) return false; const b = R.bounds(it); return b.x < x2 && b.x + b.w > x1 && b.y < y2 && b.y + b.h > y1; }).map((i) => i.id);
         setSel([...g.base, ...hits]);
       }
       requestRender(); break;
@@ -401,13 +428,24 @@ function endPointer(e) {
       if (g.type === 'move' && !g.moved) {
         if (g.removeOnTap) { setSel(S.sel.filter((id) => !g.removeOnTap.includes(id))); break; }
         const it = byId(g.tapId); const now = Date.now();
+        const tr = it && it.type === 'frame' ? R.frameToggleRect(it) : null;
+        const ci = it && it.type === 'note' && !S.multiMode && !isLocked(it) ? R.noteCheckAt(it, g.w0.x, g.w0.y) : -1;
+        if (tr && g.w0.x >= tr.x && g.w0.y <= tr.y + tr.h) { toggleCollapse(it); break; }
+        if (ci >= 0) { commit(() => { it.text = R.toggleCheck(it.text, ci); }); lastTap = { id: null, t: 0 }; showCtxBar(); break; }
         if (it && g.openLink && it.type === 'link') openLink(it);
         else if (it && lastTap.id === it.id && now - lastTap.t < 400 && !S.multiMode) {
           if (it.type === 'note' || it.type === 'text') startEdit(it, false);
           else if (it.type === 'link') openLink(it);
         }
         lastTap = { id: it && it.id, t: now };
-      } else if (snap() !== g.snap) { pushUndo(g.snap); save(); }
+      } else {
+        if (g.type === 'move' && PREF.cols) snapNotesIntoColumns(g.ids);
+        if (g.type === 'resize' && (g.k === 'p1' || g.k === 'p2')) { // drop a connector end on an item to attach it
+          const it = byId(g.orig[0].id);
+          if (it) { const k = g.k === 'p1' ? 'from' : 'to', other = g.k === 'p1' ? it.to : it.from; const t = attachAt(g.k === 'p1' ? { x: it.x1, y: it.y1 } : { x: it.x2, y: it.y2 }, it); if (t && t.id !== other) it[k] = t.id; }
+        }
+        if (snap() !== g.snap) { pushUndo(g.snap); save(); }
+      }
       showCtxBar(); requestRender(); break;
     }
   }
@@ -418,7 +456,7 @@ canvas.addEventListener('dblclick', (e) => {
   if (S.tool !== 'select' || S.multiMode) return;
   const it = topHit(toWorld(pt(e)));
   if (!it) return;
-  if (it.type === 'note' || it.type === 'text') startEdit(it, false); else if (it.type === 'link') openLink(it);
+  if (it.type === 'note' || it.type === 'text') startEdit(it, false); else if (it.type === 'link') openLink(it); else if (it.type === 'frame') renameFrame(it);
 });
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
@@ -429,6 +467,143 @@ canvas.addEventListener('wheel', (e) => {
 function eraseAt(w) {
   const victim = topHit(w, (it) => ['stroke', 'rect', 'ellipse', 'line', 'arrow'].includes(it.type)); // locked items are never erased
   if (victim) { S.board.items = S.board.items.filter((i) => i !== victim); G.removed++; requestRender(); }
+}
+
+// ---------- move helpers: frames carry their contents, connectors detach, Kanban column snapping ----------
+function prepMove(g) {
+  const ids = new Set(g.ids);
+  for (const id of [...ids]) { const f = byId(id); if (f && f.type === 'frame') for (const c of R.frameContents(S.board.items, f)) if (!isLocked(c)) ids.add(c.id); }
+  for (const id of ids) { // a connector dragged on its own lets go of items that stay behind
+    const c = byId(id); if (!c || !CONN_TYPES.includes(c.type)) continue;
+    if (c.from && !ids.has(c.from)) delete c.from;
+    if (c.to && !ids.has(c.to)) delete c.to;
+  }
+  g.ids = [...ids]; g.ob = R.boardBounds(g.ids.map(byId).filter(Boolean)); g.applied = { x: 0, y: 0 };
+}
+// Dropping sticky notes onto a column (rectangle or frame) centres them in it and stacks them below the header without overlapping.
+function snapNotesIntoColumns(ids) {
+  const moving = new Set(ids), items = ids.map(byId).filter(Boolean);
+  if (items.some((i) => i.type !== 'note' || i.groupId)) return;
+  const hid = R.hiddenIds(S.board.items);
+  const conts = S.board.items.filter((c) => (c.type === 'rect' || c.type === 'frame') && !moving.has(c.id) && !hid.has(c.id) && !c.collapsed);
+  const placed = [];
+  for (const n of items) {
+    const nc = { x: n.x + n.w / 2, y: n.y + n.h / 2 };
+    // a "column" = a tall, narrow rectangle or frame (e.g. Kanban columns); big areas are left alone
+    const cand = conts.map((c) => [c, R.bounds(c)]).filter(([, b]) => b.w >= n.w + 16 && b.w <= n.w * 2.5 && b.h >= b.w * 1.3 && nc.x >= b.x && nc.x <= b.x + b.w && nc.y >= b.y && nc.y <= b.y + b.h)
+      .sort((a, b) => a[1].w * a[1].h - b[1].w * b[1].h)[0];
+    if (!cand) continue;
+    const [c, b] = cand, top = b.y + (c.type === 'frame' ? R.FRAME_HEAD + 12 : 60);
+    n.x = Math.round(b.x + (b.w - n.w) / 2);
+    let y = Math.max(top, Math.min(n.y, b.y + b.h - n.h - 10));
+    const others = S.board.items.filter((o) => o.type === 'note' && o !== n && (!moving.has(o.id) || placed.includes(o)) && !hid.has(o.id) && Math.abs(o.x + o.w / 2 - (n.x + n.w / 2)) < n.w * 0.75);
+    for (let k = 0; k < 60; k++) { const o = others.find((x) => y < x.y + x.h + 10 && y + n.h + 10 > x.y); if (!o) break; y = o.y + o.h + 12; }
+    n.y = Math.round(y); placed.push(n);
+  }
+}
+
+// ---------- frames / sections ----------
+const frames = () => S.board.items.filter((i) => i.type === 'frame');
+// Presentation / list order: top-to-bottom rows, then left-to-right.
+function framesSorted() {
+  const fs = frames().slice().sort((a, b) => a.y - b.y); const rows = [];
+  for (const f of fs) { const r = rows.find((row) => Math.abs(row[0].y - f.y) < 150); if (r) r.push(f); else rows.push([f]); }
+  return rows.flatMap((r) => r.sort((a, b) => a.x - b.x));
+}
+function newFrame(b, title) {
+  return { id: uid('i-'), type: 'frame', x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), title: title || `Frame ${frames().length + 1}`, color: R.FRAME_COLORS[frames().length % R.FRAME_COLORS.length] };
+}
+function insertFrame() {
+  const c = viewCenter(), w = Math.min(800, Math.max(320, (W * 0.8) / S.view.scale)), hh = Math.min(560, Math.max(240, (H * 0.5) / S.view.scale));
+  const f = newFrame({ x: snapV(c.x - w / 2), y: snapV(c.y - hh / 2), w, h: hh });
+  commit(() => S.board.items.unshift(f)); setTool('select'); setSel([f.id]);
+}
+function frameAroundSelected() {
+  const items = selItems(); if (!items.length) return;
+  const b = R.boardBounds(items), pad = 40;
+  const f = newFrame({ x: b.x - pad, y: b.y - pad - R.FRAME_HEAD, w: b.w + pad * 2, h: b.h + pad * 2 + R.FRAME_HEAD });
+  commit(() => S.board.items.unshift(f)); setSel([f.id]);
+}
+async function renameFrame(f) {
+  const v = await ask('Frame title', [{ name: 'title', label: 'Title', value: f.title || '', required: true }], { ok: 'Save' });
+  if (v && v.title.trim()) commit(() => { f.title = v.title.trim(); });
+  showCtxBar();
+}
+function toggleCollapse(f) {
+  commit(() => { if (f.collapsed) delete f.collapsed; else f.collapsed = true; });
+  S.sel = S.sel.filter((id) => !R.hiddenIds(S.board.items).has(id)); showCtxBar();
+}
+function fitRect(b, padTop = 70, padBottom = 40) {
+  const s = Math.min(4, Math.max(0.1, Math.min((W - 40) / Math.max(b.w, 1), (H - padTop - padBottom) / Math.max(b.h, 1))));
+  S.view = { scale: s, x: W / 2 - (b.x + b.w / 2) * s, y: padTop + (H - padTop - padBottom) / 2 - (b.y + b.h / 2) * s }; saveViewSoon(); requestRender();
+}
+function goToFrame(f) { fitRect({ x: f.x, y: f.y, w: f.w, h: f.collapsed ? R.FRAME_HEAD : f.h }, 80, 150); }
+function framesMenu(anchor) {
+  const fs = framesSorted();
+  const item = (label, fn) => h('button', { class: 'menu-item', onclick: () => { closePopover(); fn(); } }, label);
+  popover(anchor, h('div', { class: 'menu' }, h('div', { class: 'pop-title' }, 'Frames'),
+    ...(fs.length ? fs.map((f, i) => item(`${i + 1}. ${f.title || 'Frame'}${f.collapsed ? ' (collapsed)' : ''}`, () => goToFrame(f))) : [h('p', { class: 'muted small', style: 'padding:0 12px' }, 'No frames yet: + › Frame / section, or select items › Frame.')]),
+    fs.length ? item('▶ Present from the start', () => startPresent(0)) : null), { place: 'below' });
+}
+
+// ---------- present mode: step through frames like slides ----------
+const P = { on: false, i: 0, list: [], saved: null, down: null };
+function startPresent(i = 0) {
+  const list = framesSorted();
+  if (!list.length) return toast('Add a frame first: + › Frame / section (or select items › Frame).');
+  finishEdit(); closePopover(); setSel([]);
+  Object.assign(P, { on: true, list, saved: { ...S.view } });
+  document.body.classList.add('presenting'); $('#presentBar').hidden = false; $('#minimap').hidden = true;
+  goSlide(i);
+}
+function goSlide(i) {
+  if (!P.on) return;
+  P.list = P.list.filter((f) => byId(f.id));
+  if (!P.list.length) return stopPresent();
+  P.i = Math.max(0, Math.min(P.list.length - 1, i));
+  const f = P.list[P.i];
+  fitRect({ x: f.x, y: f.y, w: f.w, h: f.h }, 16, 76);
+  $('#presLabel').textContent = `${P.i + 1} / ${P.list.length} · ${f.title || 'Frame'}`;
+  $('#presPrev').disabled = P.i === 0; $('#presNext').disabled = P.i === P.list.length - 1;
+}
+function stopPresent() {
+  if (!P.on) return;
+  P.on = false; document.body.classList.remove('presenting'); $('#presentBar').hidden = true;
+  if (P.saved) S.view = P.saved; $('#minimap').hidden = !PREF.map; requestRender();
+}
+function presentPointerUp(e) {
+  if (!P.down) return; const p = pt(e), dx = p.x - P.down.x, dy = p.y - P.down.y; P.down = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) goSlide(P.i + (dx < 0 ? 1 : -1)); // swipe
+  else if (Math.hypot(dx, dy) < 10) goSlide(P.i + (p.x > W / 3 ? 1 : -1)); // tap right = next, left third = back
+}
+
+// ---------- mini-map ----------
+let mapX = null;
+function drawMinimap() {
+  const c = $('#miniCanvas'); if (!c || $('#minimap').hidden) return;
+  const cw = c.clientWidth, ch = c.clientHeight; if (!cw) return;
+  if (c.width !== Math.round(cw * DPR)) { c.width = Math.round(cw * DPR); c.height = Math.round(ch * DPR); }
+  const m = c.getContext('2d'); m.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const vb = { x: -S.view.x / S.view.scale, y: -S.view.y / S.view.scale, w: W / S.view.scale, h: H / S.view.scale };
+  const bb = S.board.items.length ? R.boardBounds(S.board.items) : vb;
+  const x1 = Math.min(bb.x, vb.x), y1 = Math.min(bb.y, vb.y), x2 = Math.max(bb.x + bb.w, vb.x + vb.w), y2 = Math.max(bb.y + bb.h, vb.y + vb.h);
+  const s = Math.min((cw - 8) / (x2 - x1), (ch - 8) / (y2 - y1));
+  const view = { scale: s, x: (cw - (x2 - x1) * s) / 2 - x1 * s, y: (ch - (y2 - y1) * s) / 2 - y1 * s };
+  mapX = view;
+  R.drawBoard(m, { ...S.board, background: 'solid' }, view, cw, ch, { ...env(), editingId: null });
+  m.strokeStyle = '#2563eb'; m.lineWidth = 2; m.fillStyle = 'rgba(37,99,235,0.10)';
+  m.fillRect(view.x + vb.x * s, view.y + vb.y * s, vb.w * s, vb.h * s); m.strokeRect(view.x + vb.x * s, view.y + vb.y * s, vb.w * s, vb.h * s);
+}
+function setMinimap(on) { PREF.map = on; localStorage.setItem('wb-minimap', on ? '1' : '0'); $('#minimap').hidden = !on; $('#btnMap').classList.toggle('active', on); requestRender(); }
+function initMinimap() {
+  const c = $('#miniCanvas'); let drag = false;
+  const go = (e) => { if (!mapX) return; const r = c.getBoundingClientRect(); const wx = (e.clientX - r.left - mapX.x) / mapX.scale, wy = (e.clientY - r.top - mapX.y) / mapX.scale; S.view.x = W / 2 - wx * S.view.scale; S.view.y = H / 2 - wy * S.view.scale; saveViewSoon(); requestRender(); };
+  c.addEventListener('pointerdown', (e) => { e.preventDefault(); drag = true; c.setPointerCapture(e.pointerId); go(e); });
+  c.addEventListener('pointermove', (e) => { if (drag) go(e); });
+  c.addEventListener('pointerup', () => { drag = false; }); c.addEventListener('pointercancel', () => { drag = false; });
+  $('#btnMap').onclick = () => setMinimap(!PREF.map);
+  $('#btnFrames').onclick = (e) => framesMenu(e.currentTarget);
+  setMinimap(PREF.map);
 }
 
 // ---------- text editing overlay ----------
@@ -536,6 +711,7 @@ function insertMenu(anchor) {
     item('image', 'Upload picture (saved to Drive)', () => $('#fileImage').click()),
     item('link', 'Picture from URL', insertImageUrl),
     item('open', 'Link a document or web page', insertLinkDialog),
+    item('frame', 'Frame / section', insertFrame),
     item('note', 'Sticky note', () => { const c = toWorld({ x: W / 2, y: H / 2 }); const it = { id: uid('i-'), type: 'note', x: c.x - 100, y: c.y - 80, w: 200, h: 160, text: '', color: S.noteColor, fontSize: 20 }; commit(() => S.board.items.push(it)); setTool('select'); setSel([it.id]); startEdit(it, false); }),
   ));
 }
@@ -655,8 +831,9 @@ function showCtxBar() {
   if (!items.length || (S.tool !== 'select' && !S.editingId)) { bar.hidden = true; return; }
   bar.innerHTML = '';
   const btn = (icon, label, fn) => bar.append(h('button', { class: 'tool sm', title: label, 'aria-label': label, 'data-act': icon, html: ICONS[icon], onclick: fn }));
-  if (items.every((i) => i.locked)) {
-    bar.append(h('span', { class: 'ctx-label', html: `${ICONS.lock}<span>Locked${items.length > 1 ? ` (${items.length})` : ''}</span>` }));
+  if (items.every(isLocked)) {
+    const bgOnly = items.every((i) => !i.locked);
+    bar.append(h('span', { class: 'ctx-label', html: `${ICONS.lock}<span>${bgOnly ? 'Background locked' : 'Locked'}${items.length > 1 ? ` (${items.length})` : ''}</span>` }));
     btn('unlock', 'Unlock', () => setLock(false));
     bar.hidden = false; positionCtxBar(); return;
   }
@@ -678,13 +855,26 @@ function showCtxBar() {
   if (one && (one.type === 'note' || one.type === 'text')) btn('edit', 'Edit text', () => startEdit(one, false));
   if (one && one.type === 'link') { btn('open', 'Open original', () => openLink(one)); btn('eye', 'Preview', () => previewLink(one)); btn('edit', 'Edit link', () => insertLinkDialog(one)); }
   if (one && one.type === 'image' && one.src) btn('open', 'Open picture source', () => window.open(one.src, '_blank', 'noopener'));
+  if (notes.length) btn('tag', 'Tags, due date & checklist', (e) => noteDetailsMenu(e.currentTarget));
+  if (one && one.type === 'frame') {
+    bar.append(h('button', { class: 'chip sm', 'data-act': 'framecolor', style: `background:${one.color || R.FRAME_COLORS[0]}`, 'aria-label': 'Frame colour', title: 'Frame colour', onclick: (e) => {
+      const row = h('div', { class: 'pop-row wrap' }, ...R.FRAME_COLORS.map((c) => h('button', { class: 'chip', style: `background:${c}`, 'aria-label': 'Frame colour ' + c, onclick: () => { commit(() => { one.color = c; }); closePopover(); showCtxBar(); } })));
+      popover(e.currentTarget, row, { place: 'below' });
+    } }));
+    btn('edit', 'Rename frame', () => renameFrame(one));
+    btn(one.collapsed ? 'expand' : 'collapse', one.collapsed ? 'Expand frame' : 'Collapse frame', () => toggleCollapse(one));
+    btn('present', 'Present from this frame', () => startPresent(framesSorted().indexOf(one)));
+  }
+  const us = units(items.filter((i) => !isLocked(i)));
   btn('multi', S.multiMode ? 'Finish selecting' : 'Select more (tap items to add)', () => setMultiMode(!S.multiMode));
+  if (us.length === 2 && us.every((u) => u.some((i) => !CONN_TYPES.includes(i.type)))) btn('connect', 'Connect with an arrow', connectSelected);
+  if (us.length >= 2) btn('align', 'Align & distribute', (e) => alignMenu(e.currentTarget));
+  if (!items.some((i) => i.type === 'frame')) btn('frame', 'Put in a frame', frameAroundSelected);
   if (items.length > 1 && !isGroupSel()) btn('group', 'Group', groupSelected);
   if (items.some((i) => i.groupId)) btn('ungroup', 'Ungroup', ungroupSelected);
   btn('lock', 'Lock (stays put)', () => setLock(true));
   btn('copy', 'Duplicate', duplicateSelected);
-  btn('front', 'Bring to front', () => reorder(true));
-  btn('back', 'Send to back', () => reorder(false));
+  btn('layers', 'Layers: front / back / background', (e) => layersMenu(e.currentTarget));
   btn('trash', 'Delete', deleteSelected);
   bar.querySelector('[data-act=multi]').classList.toggle('active', S.multiMode);
   bar.hidden = false; positionCtxBar();
@@ -701,13 +891,14 @@ function positionCtxBar() {
   bar.style.left = Math.min(Math.max(8, p.x - bw / 2), W - bw - 8) + 'px'; bar.style.top = Math.min(top, H - 160) + 'px';
 }
 function deleteSelected() {
-  const ids = new Set(selItems().filter((i) => !i.locked).map((i) => i.id)); if (!ids.size) return;
+  const ids = new Set(selItems().filter((i) => !isLocked(i)).map((i) => i.id)); if (!ids.size) return;
   commit(() => { S.board.items = S.board.items.filter((i) => !ids.has(i.id)); }); setSel([]);
 }
 function duplicateSelected() {
-  const gmap = new Map();
+  const gmap = new Map(), idmap = new Map(selItems().map((i) => [i.id, uid('i-')]));
   const copies = selItems().map((it) => {
-    const c = JSON.parse(JSON.stringify(it)); c.id = uid('i-'); delete c.locked;
+    const c = JSON.parse(JSON.stringify(it)); c.id = idmap.get(it.id); delete c.locked;
+    for (const k of ['from', 'to']) if (c[k]) { if (idmap.has(c[k])) c[k] = idmap.get(c[k]); else delete c[k]; }
     if (c.groupId) { if (!gmap.has(c.groupId)) gmap.set(c.groupId, uid('g-')); c.groupId = gmap.get(c.groupId); }
     R.moveItem(c, 24, 24); return c;
   });
@@ -717,16 +908,113 @@ function reorder(toFront) {
   const ids = new Set(S.sel);
   commit(() => { const sel = S.board.items.filter((i) => ids.has(i.id)), rest = S.board.items.filter((i) => !ids.has(i.id)); S.board.items = toFront ? rest.concat(sel) : sel.concat(rest); });
 }
+function stepOrder(up) { // one step forward / backward
+  const ids = new Set(S.sel);
+  commit(() => {
+    const a = S.board.items;
+    if (up) { for (let i = a.length - 2; i >= 0; i--) if (ids.has(a[i].id) && !ids.has(a[i + 1].id)) [a[i], a[i + 1]] = [a[i + 1], a[i]]; }
+    else { for (let i = 1; i < a.length; i++) if (ids.has(a[i].id) && !ids.has(a[i - 1].id)) [a[i], a[i - 1]] = [a[i - 1], a[i]]; }
+  });
+}
+function setLayer(bg) {
+  const items = selItems().filter((i) => !isLocked(i)); if (!items.length) return;
+  commit(() => items.forEach((i) => { if (bg) i.layer = 'bg'; else delete i.layer; }));
+  if (bg && S.board.bgLocked) { setSel([]); toast('Moved to the background layer (locked). ⋯ › Unlock background layer to edit it.', { ms: 3500 }); } else showCtxBar();
+}
+function setBgLocked(on) {
+  commit(() => { if (on) S.board.bgLocked = true; else delete S.board.bgLocked; });
+  setSel(S.sel.filter((id) => { const i = byId(id); return i && !isLocked(i); }));
+  const n = S.board.items.filter((i) => i.layer === 'bg').length;
+  toast(on ? `Background layer locked (${n} item${n === 1 ? '' : 's'}). Drag on it to pan; notes move over it.` : 'Background layer unlocked.', { ms: 3000 });
+}
+function layersMenu(anchor) {
+  const items = selItems(); const inBg = items.every((i) => i.layer === 'bg');
+  const item = (act, label, fn) => h('button', { class: 'menu-item', 'data-layer': act, onclick: () => { closePopover(); fn(); } }, label);
+  popover(anchor, h('div', { class: 'menu' },
+    item('front', '⤒  Bring to front', () => reorder(true)),
+    item('forward', '↑  Bring forward', () => stepOrder(true)),
+    item('backward', '↓  Send backward', () => stepOrder(false)),
+    item('back', '⤓  Send to back', () => reorder(false)),
+    h('div', { class: 'pop-title' }, 'Layer'),
+    inBg ? item('main', 'Move to main layer', () => setLayer(false)) : item('bg', 'Move to background layer', () => setLayer(true)),
+    item('bglock', S.board.bgLocked ? 'Unlock background layer' : 'Lock background layer', () => setBgLocked(!S.board.bgLocked))), { place: 'below' });
+}
+// Units = groups (moved as one) or single items.
+function units(items) {
+  const m = new Map(); for (const i of items) { const k = i.groupId || i.id; if (!m.has(k)) m.set(k, []); m.get(k).push(i); }
+  return [...m.values()];
+}
+function alignSelected(mode) {
+  const us = units(selItems().filter((i) => !isLocked(i))); if (us.length < 2) return;
+  const ub = us.map((u) => ({ u, b: R.boardBounds(u) })), all = R.boardBounds(us.flat());
+  const mv = (u, dx, dy) => { if (dx || dy) u.forEach((i) => R.moveItem(i, dx, dy)); };
+  commit(() => {
+    if (mode === 'dist-h' || mode === 'dist-v') {
+      if (ub.length < 3) return;
+      const H_ = mode === 'dist-h', key = H_ ? 'x' : 'y', size = H_ ? 'w' : 'h';
+      ub.sort((a, b) => a.b[key] - b.b[key]);
+      const total = ub.reduce((t, x) => t + x.b[size], 0), gap = (all[size] - total) / (ub.length - 1);
+      let pos = all[key];
+      for (const x of ub) { const d = Math.round(pos - x.b[key]); mv(x.u, H_ ? d : 0, H_ ? 0 : d); pos += x.b[size] + gap; }
+      return;
+    }
+    for (const { u, b } of ub) {
+      const dx = mode === 'left' ? all.x - b.x : mode === 'center' ? all.x + all.w / 2 - (b.x + b.w / 2) : mode === 'right' ? all.x + all.w - (b.x + b.w) : 0;
+      const dy = mode === 'top' ? all.y - b.y : mode === 'middle' ? all.y + all.h / 2 - (b.y + b.h / 2) : mode === 'bottom' ? all.y + all.h - (b.y + b.h) : 0;
+      mv(u, Math.round(dx), Math.round(dy));
+    }
+  });
+}
+function alignMenu(anchor) {
+  const n = units(selItems().filter((i) => !isLocked(i))).length;
+  const b = (mode, label, title) => h('button', { class: 'btn sm al-btn', 'data-align': mode, title, 'aria-label': title, onclick: () => { alignSelected(mode); } }, label);
+  popover(anchor, h('div', { class: 'fmt-menu' },
+    h('div', { class: 'pop-title' }, 'Align'),
+    h('div', { class: 'pop-row' }, b('left', '⇤', 'Align left'), b('center', '↔', 'Align centres (horizontal)'), b('right', '⇥', 'Align right')),
+    h('div', { class: 'pop-row' }, b('top', '⤒', 'Align top'), b('middle', '↕', 'Align middles (vertical)'), b('bottom', '⤓', 'Align bottom')),
+    n >= 3 ? h('div', { class: 'pop-title' }, 'Distribute evenly') : null,
+    n >= 3 ? h('div', { class: 'pop-row' }, b('dist-h', '⇹ Across', 'Distribute horizontally'), b('dist-v', '⇳ Down', 'Distribute vertically')) : null), { place: 'below' });
+}
+function connectSelected() {
+  const us = units(selItems().filter((i) => !isLocked(i))); if (us.length !== 2) return;
+  const pick = (u) => u.find((i) => i.type === 'note') || u.find((i) => !CONN_TYPES.includes(i.type) && i.type !== 'stroke') || u[0];
+  const [a, b] = us.map(pick), ca = R.bounds(a), cb = R.bounds(b);
+  const ar = { id: uid('i-'), type: 'arrow', x1: ca.x + ca.w / 2, y1: ca.y + ca.h / 2, x2: cb.x + cb.w / 2, y2: cb.y + cb.h / 2, color: S.color, size: 3, from: a.id, to: b.id };
+  commit(() => { S.board.items.push(ar); R.updateConnectors(S.board.items); }); setMultiMode(false); setSel([ar.id]);
+}
+function noteDetailsMenu(anchor) {
+  const notes = selItems().filter((i) => i.type === 'note' && !isLocked(i)); if (!notes.length) return;
+  const first = notes[0];
+  const tags = h('input', { type: 'text', class: 'nd-tags', value: (first.tags || []).join(', '), placeholder: 'e.g. urgent, client', 'aria-label': 'Tags (comma separated)' });
+  const due = h('input', { type: 'date', class: 'nd-due', value: first.due || '', 'aria-label': 'Due date' });
+  const apply = () => {
+    const t = [...new Set(tags.value.split(',').map((x) => x.trim().replace(/^#/, '')).filter(Boolean))].slice(0, 8);
+    commit(() => notes.forEach((n) => { if (t.length) n.tags = t; else delete n.tags; if (due.value) n.due = due.value; else delete n.due; }));
+    closePopover(); showCtxBar();
+  };
+  const addCheck = () => {
+    closePopover(); if (notes.length !== 1) return;
+    const n = notes[0];
+    commit(() => { n.text = (n.text && n.text.trim() ? n.text.replace(/\s+$/, '') + '\n' : '') + '[ ] '; });
+    startEdit(n, false);
+  };
+  const quick = (label, days) => h('button', { class: 'btn sm', onclick: () => { const d = new Date(); d.setDate(d.getDate() + days); due.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; } }, label);
+  popover(anchor, h('div', { class: 'fmt-menu nd-menu' },
+    h('div', { class: 'pop-title' }, 'Tags (comma separated)'), h('div', { class: 'pop-row' }, tags),
+    h('div', { class: 'pop-title' }, 'Due date'), h('div', { class: 'pop-row' }, due), h('div', { class: 'pop-row' }, quick('Today', 0), quick('Tomorrow', 1), quick('+1 week', 7), h('button', { class: 'btn sm', onclick: () => { due.value = ''; } }, 'None')),
+    h('div', { class: 'pop-row' }, h('button', { class: 'btn sm primary nd-save', onclick: apply }, 'Save'), notes.length === 1 ? h('button', { class: 'btn sm nd-check', onclick: addCheck }, '☑ Add checklist item') : null),
+    h('p', { class: 'muted small', style: 'margin:4px 8px;max-width:260px' }, 'Checklist: start a line with [ ] in the note; tap the box to tick it.')), { place: 'below' });
+}
 function setLock(on) {
   const items = selItems(); if (!items.length) return;
-  commit(() => items.forEach((i) => { if (on) i.locked = true; else delete i.locked; }));
+  commit(() => { items.forEach((i) => { if (on) i.locked = true; else delete i.locked; }); if (!on && items.some((i) => i.layer === 'bg')) delete S.board.bgLocked; });
   if (on) { setSel([]); toast(`Locked ${items.length > 1 ? items.length + ' items' : ''} – it stays put. To unlock: long-press it, or ⋯ › Unlock all.`, { ms: 3500 }); }
   else showCtxBar();
 }
 function unlockAll() {
-  const locked = S.board.items.filter((i) => i.locked);
+  const locked = S.board.items.filter(isLocked);
   if (!locked.length) return toast('Nothing is locked on this board.');
-  commit(() => locked.forEach((i) => { delete i.locked; }));
+  commit(() => { locked.forEach((i) => { delete i.locked; }); delete S.board.bgLocked; });
   setTool('select'); setSel(locked.map((i) => i.id));
   toast(`Unlocked ${locked.length} item(s).`, { ms: 2500 });
 }
@@ -735,7 +1023,7 @@ function groupSelected() {
   const gid = uid('g-'); commit(() => items.forEach((i) => { i.groupId = gid; })); showCtxBar();
 }
 function ungroupSelected() { commit(() => selItems().forEach((i) => { delete i.groupId; })); showCtxBar(); }
-function selectAll() { setTool('select'); setSel(S.board.items.filter((i) => !i.locked).map((i) => i.id)); }
+function selectAll() { setTool('select'); const hid = R.hiddenIds(S.board.items); setSel(S.board.items.filter((i) => !isLocked(i) && !hid.has(i.id)).map((i) => i.id)); }
 function setMultiMode(on) { S.multiMode = on; showCtxBar(); updateMultiBanner(); }
 function updateMultiBanner() {
   const b = $('#multiBanner'); if (!b) return;
@@ -743,7 +1031,7 @@ function updateMultiBanner() {
   if (S.multiMode) $('#multiCount').textContent = S.sel.length ? `${S.sel.length} selected` : 'Tap items to select · drag to box-select';
 }
 function formatMenu(anchor) {
-  const texts = selItems().filter((i) => (i.type === 'note' || i.type === 'text') && !i.locked); if (!texts.length) return;
+  const texts = selItems().filter((i) => (i.type === 'note' || i.type === 'text') && !isLocked(i)); if (!texts.length) return;
   const first = texts[0];
   const apply = (fn) => { commit(() => texts.forEach(fn)); closePopover(); showCtxBar(); const a = $('#ctxbar [data-act=format]'); if (a) formatMenu(a); };
   const sizeName = (it) => Object.entries(FONT_SIZES[it.type]).find(([, v]) => v === (it.fontSize || (it.type === 'note' ? 20 : 28)));
@@ -837,7 +1125,7 @@ async function saveAsTemplate(id) {
   const v = await ask('Save as template', [{ name: 'name', label: 'Template name', value: b.name, required: true }], { ok: 'Save template' });
   if (!v || !v.name.trim()) return;
   const existing = (await db.all('templates')).find((t) => !t.deleted && t.name === v.name.trim());
-  const t = { id: existing ? existing.id : uid('tpl-'), name: v.name.trim(), background: b.background, items: JSON.parse(JSON.stringify(b.items)), dirty: true, deleted: false, driveFileId: existing ? existing.driveFileId : null };
+  const t = { id: existing ? existing.id : uid('tpl-'), name: v.name.trim(), background: b.background, ...(b.bgLocked ? { bgLocked: true } : {}), items: JSON.parse(JSON.stringify(b.items)), dirty: true, deleted: false, driveFileId: existing ? existing.driveFileId : null };
   await db.put('templates', t); sync && sync.schedule(500);
   toast(existing ? `Template “${t.name}” updated.` : `Saved template “${t.name}”. Find it under New board.`);
 }
@@ -856,8 +1144,8 @@ async function searchDialog() {
       const hits = [];
       if (b.name.toLowerCase().includes(q)) hits.push({ label: 'Board name', text: b.name });
       for (const it of b.items) {
-        const txt = it.type === 'note' || it.type === 'text' ? it.text : it.type === 'link' ? `${it.title} ${it.url}` : '';
-        if (txt && txt.toLowerCase().includes(q)) hits.push({ it, label: it.type === 'note' ? 'Sticky note' : it.type === 'text' ? 'Text' : 'Link', text: txt });
+        const txt = it.type === 'note' ? [it.text, ...(it.tags || []).map((t) => '#' + t)].join(' ') : it.type === 'text' ? it.text : it.type === 'link' ? `${it.title} ${it.url}` : it.type === 'frame' ? it.title : '';
+        if (txt && txt.toLowerCase().includes(q)) hits.push({ it, label: it.type === 'note' ? 'Sticky note' : it.type === 'text' ? 'Text' : it.type === 'frame' ? 'Frame' : 'Link', text: txt });
       }
       if (!hits.length) continue;
       const grp = h('div', { class: 'result-group' }, h('div', { class: 'result-board' }, `📋 ${b.name}`));
@@ -866,7 +1154,7 @@ async function searchDialog() {
         const snip = (s ? '…' : '') + esc(r.text.slice(s, i)) + '<mark>' + esc(r.text.slice(i, i + q.length)) + '</mark>' + esc(r.text.slice(i + q.length, i + q.length + 60));
         grp.append(h('button', { class: 'result', onclick: async () => {
           closeModal(null); if (!S.board || S.board.id !== b.id) await openBoard(b.id);
-          if (r.it) { const live = S.board.items.find((x) => x.id === r.it.id); if (live) { setTool('select'); setSel([live.id]); centerOn(live); } }
+          if (r.it) { const live = S.board.items.find((x) => x.id === r.it.id); if (live) { setTool('select'); if (live.type === 'frame') { goToFrame(live); setSel([live.id]); } else { for (const f of frames()) if (f.collapsed && R.frameContents(S.board.items, f).includes(live)) commit(() => { delete f.collapsed; }); setSel([live.id]); centerOn(live); } } }
         } }, h('small', {}, r.label), h('span', { html: snip })));
         n++;
       }
@@ -901,7 +1189,7 @@ async function versionsDialog() {
           try {
             await saveChain; await sync.saveVersion(S.board, 'before-restore');
             const data = await adapter.readJSON(v.id);
-            commit(() => { S.board.items = data.items || []; S.board.background = data.background || 'grid'; });
+            commit(() => { S.board.items = data.items || []; S.board.background = data.background || 'grid'; if (data.bgLocked) S.board.bgLocked = true; else delete S.board.bgLocked; });
             toast('Version restored.'); fitView();
           } catch (e) { toast('Restore failed: ' + e.message, { kind: 'error' }); }
         } }, 'Restore')));
@@ -914,7 +1202,7 @@ async function importJSONFile(file) {
   try {
     const d = JSON.parse(await file.text());
     if (!Array.isArray(d.items)) throw new Error('Not a My Whiteboard JSON file');
-    await createBoard({ name: d.name || file.name.replace(/\.json$/, ''), background: d.background, items: d.items }, `${d.name || 'Imported board'}`);
+    await createBoard({ name: d.name || file.name.replace(/\.json$/, ''), background: d.background, bgLocked: d.bgLocked, items: d.items }, `${d.name || 'Imported board'}`);
     toast('Board imported.');
   } catch (e) { toast('Import failed: ' + e.message, { kind: 'error' }); }
 }
@@ -941,6 +1229,13 @@ function moreMenu(anchor) {
     item('note', 'Save board as template…', () => saveAsTemplate(S.board.id)),
     item('undo', 'Version history…', versionsDialog),
     item('unlock', 'Unlock all items on this board', unlockAll),
+    h('div', { class: 'pop-title' }, 'Arrange & present'),
+    item('present', 'Present frames ▶', () => startPresent(0)),
+    item('frame', 'Go to frame…', () => framesMenu(anchor)),
+    item('map', `Mini-map: ${PREF.map ? 'on' : 'off'}`, () => setMinimap(!PREF.map)),
+    item('grid', `Snap to grid: ${PREF.grid ? 'on' : 'off'}`, () => { PREF.grid = !PREF.grid; localStorage.setItem('wb-snap-grid', PREF.grid ? '1' : '0'); toast(`Snap to grid ${PREF.grid ? 'on' : 'off'}.`, { ms: 1500 }); }),
+    item('note', `Snap notes into columns: ${PREF.cols ? 'on' : 'off'}`, () => { PREF.cols = !PREF.cols; localStorage.setItem('wb-snap-cols', PREF.cols ? '1' : '0'); toast(`Snap notes into columns ${PREF.cols ? 'on' : 'off'}.`, { ms: 1500 }); }),
+    item('lock', S.board.bgLocked ? 'Unlock background layer' : 'Lock background layer', () => setBgLocked(!S.board.bgLocked)),
     h('div', { class: 'pop-title' }, 'Background'), bgRow,
     h('div', { class: 'pop-title' }, 'Export'),
     item('image', 'Export as PNG image', () => doExport('png')),
@@ -965,7 +1260,7 @@ async function helpDialog() {
     `Changes waiting to sync: ${S.pending}`,
   ];
   openModal('Offline status & help', h('div', { class: 'stack' }, ...lines.map((l) => h('p', {}, l)),
-    h('p', { class: 'muted small' }, 'Tips: two fingers pan & zoom on touch. With the Select tool, drag empty space to pan; double-tap a note to edit it. Keyboard: V select, P pen, H highlighter, E eraser, S shapes, T text, N note, Ctrl+Z / Ctrl+Shift+Z, Delete removes the selection, Space+drag pans. Shift-click or Shift+drag (box) selects several; Ctrl+A all, Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+L lock/unlock, Ctrl+B bold, Ctrl+I italic. Long-press a locked item to select it, then Unlock. Paste a picture or link straight onto the board.'),
+    h('p', { class: 'muted small' }, 'Tips: two fingers pan & zoom on touch. With the Select tool, drag empty space to pan; double-tap a note to edit it. Keyboard: V select, P pen, H highlighter, E eraser, S shapes, T text, N note, Ctrl+Z / Ctrl+Shift+Z, Delete removes the selection, Space+drag pans. Shift-click or Shift+drag (box) selects several; Ctrl+A all, Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+L lock/unlock, Ctrl+B bold, Ctrl+I italic. Long-press a locked item to select it, then Unlock. Paste a picture or link straight onto the board. Arrows drawn from one item to another stay attached. Ctrl+] / Ctrl+[ forward / backward (add Shift for front / back). Present mode: arrow keys or swipe, Esc to leave.'),
     h('div', { class: 'row end' }, h('button', { class: 'btn primary', onclick: () => { closeModal(); manualSync(); } }, 'Sync now'))));
 }
 
@@ -1022,15 +1317,22 @@ function signInGate() {
 // ---------- keyboard, paste, drop ----------
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea, [contenteditable]')) return;
+  if (P.on) {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); goSlide(P.i + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); goSlide(P.i - 1); }
+    else if (e.key === 'Escape') stopPresent();
+    return;
+  }
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+  if (mod && (e.key === ']' || e.key === '[') && S.sel.length) { e.preventDefault(); if (e.shiftKey) reorder(e.key === ']'); else stepOrder(e.key === ']'); return; }
   if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && k === 'y') { e.preventDefault(); redo(); return; }
   if (mod && k === 'f') { e.preventDefault(); searchDialog(); return; }
   if (mod && k === 'a') { e.preventDefault(); selectAll(); return; }
   if (mod && k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSelected() : groupSelected(); return; }
-  if (mod && k === 'l') { e.preventDefault(); if (S.sel.length) setLock(!selItems().every((i) => i.locked)); return; }
+  if (mod && k === 'l') { e.preventDefault(); if (S.sel.length) setLock(!selItems().every(isLocked)); return; }
   if (mod && (k === 'b' || k === 'i') && S.sel.length) {
-    e.preventDefault(); const texts = selItems().filter((i) => (i.type === 'note' || i.type === 'text') && !i.locked); const key = k === 'b' ? 'bold' : 'italic';
+    e.preventDefault(); const texts = selItems().filter((i) => (i.type === 'note' || i.type === 'text') && !isLocked(i)); const key = k === 'b' ? 'bold' : 'italic';
     const all = texts.every((i) => i[key]); if (texts.length) commit(() => texts.forEach((i) => { if (all) delete i[key]; else i[key] = true; })); return;
   }
   if (mod) return;
@@ -1077,7 +1379,9 @@ async function boot() {
   $('#modalClose').onclick = () => closeModal(null); $('#modal').addEventListener('pointerdown', (e) => { if (e.target.id === 'modal') closeModal(null); });
   $('#fileImage').onchange = async (e) => { for (const f of e.target.files) await insertImageFile(f); e.target.value = ''; };
   $('#fileJSON').onchange = async (e) => { if (e.target.files[0]) await importJSONFile(e.target.files[0]); e.target.value = ''; };
-  addEventListener('resize', () => { resize(); if (S.editingId) layoutEditor(); });
+  addEventListener('resize', () => { resize(); if (S.editingId) layoutEditor(); if (P.on) goSlide(P.i); });
+  $('#presPrev').onclick = () => goSlide(P.i - 1); $('#presNext').onclick = () => goSlide(P.i + 1); $('#presExit').onclick = stopPresent;
+  $('#btnMap').innerHTML = ICONS.map; $('#btnFrames').innerHTML = ICONS.frame; initMinimap();
   resize();
 
   // Storage: ask the browser to keep our offline data.
@@ -1122,5 +1426,5 @@ async function boot() {
 }
 
 // Test / debugging hook (no secrets here).
-window.__wb = { S, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
+window.__wb = { S, PREF, P, startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
 boot().catch((e) => { console.error(e); toast('Startup error: ' + e.message, { kind: 'error', ms: 0 }); });

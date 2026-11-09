@@ -56,7 +56,7 @@ export function makePdf(jpeg, pw, ph, title = 'Board') {
 }
 
 export function exportJSON(board) {
-  const data = { app: 'my-whiteboard', schema: 1, exportedAt: new Date().toISOString(), id: board.id, name: board.name, background: board.background, items: board.items };
+  const data = { app: 'my-whiteboard', schema: 1, exportedAt: new Date().toISOString(), id: board.id, name: board.name, background: board.background, ...(board.bgLocked ? { bgLocked: true } : {}), items: board.items };
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
   download(blob, fname(board, 'json')); return blob;
 }
