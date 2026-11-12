@@ -17,7 +17,7 @@ async function imageMap(b) {
 const safeName = (s) => String(s || 'Untitled').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
 const fileName = (b) => `${safeName(b.name)}.board.json`;
 
-export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged, buildInboxBoard }) {
+export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged, buildInboxBoard, applyInboxItems }) {
   let running = null, again = false, timer = null;
   const maxVersions = cfg.MAX_VERSIONS || 5;
   const versionGapMs = (cfg.VERSION_INTERVAL_MINUTES ?? 10) * 60_000;
@@ -199,8 +199,39 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
     }
   }
 
-  // Drive inbox (Whiteboard/inbox): each {"type":"new-board", ...} JSON file creates one board, then goes to the Drive bin.
-  // Idempotent: the board id is derived from the file's "id" (or the Drive file id), so a file is never turned into two boards.
+  // Drive inbox (Whiteboard/inbox): JSON files create a board or add items, then go to the Drive bin.
+  // Idempotent: new-board id is derived from the file's "id"; add-items uses inboxDone plus the file's "id",
+  // and deterministic item ids, so the same item is never added twice.
+  async function resolveInboxBoard(ref, bad) {
+    const key = String(ref || '').trim();
+    if (!key) throw bad('"board" is required (board name or id)');
+    const locals = (await db.all('boards')).filter((b) => !b.deleted);
+    let b = locals.find((x) => x.id === key);
+    if (!b) {
+      const want = key.toLowerCase();
+      const hits = locals.filter((x) => String(x.name || '').toLowerCase() === want).sort((a, c) => (c.updatedAt || 0) - (a.updatedAt || 0));
+      if (hits.length) b = hits[0];
+    }
+    if (b) return b;
+    const remote = await adapter.listFiles('boards');
+    for (const r of remote) {
+      const bid = r.appProperties && r.appProperties.boardId;
+      if (bid === key) {
+        const data = await adapter.readJSON(r.id);
+        if (!data.id) data.id = bid;
+        return await applyRemote(null, r, data);
+      }
+    }
+    const want = key.toLowerCase();
+    for (const r of remote) {
+      let data;
+      try { data = await adapter.readJSON(r.id); } catch { continue; }
+      if (String(data.name || '').toLowerCase() !== want) continue;
+      if (!data.id) data.id = (r.appProperties && r.appProperties.boardId) || r.id;
+      return await applyRemote(null, r, data);
+    }
+    throw bad(`board “${key}” was not found`);
+  }
   async function processInbox(notices) {
     if (!buildInboxBoard) return;
     const files = (await adapter.listFiles('inbox')).filter((f) => !/^ERROR/i.test(f.name)).sort((a, b) => String(a.createdTime || a.name).localeCompare(String(b.createdTime || b.name)));
@@ -213,14 +244,34 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
           let d;
           try { d = await adapter.readJSON(f.id); } catch (e) { if (e instanceof SyntaxError) { e.inbox = true; e.message = 'not valid JSON'; } throw e; }
           const bad = (m) => { const e = new Error(m); e.inbox = true; return e; };
-          if (!d || typeof d !== 'object' || d.type !== 'new-board') throw bad('"type" must be "new-board"');
-          if (typeof d.name !== 'string' || !d.name.trim()) throw bad('"name" is required');
-          const bid = 'b-inbox-' + String(d.id || f.id).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
-          if (!(await db.get('boards', bid)) && !remoteIds.has(bid)) {
-            const b = await buildInboxBoard(d, bid);
-            const now = Date.now(); Object.assign(b, { createdAt: now, updatedAt: now, dirty: true, deleted: false });
-            await db.put('boards', b);
-            notices.push(`New board “${b.name}” was created from your Drive inbox.`);
+          if (!d || typeof d !== 'object' || (d.type !== 'new-board' && d.type !== 'add-items')) throw bad('"type" must be "new-board" or "add-items"');
+          if (d.type === 'new-board') {
+            if (typeof d.name !== 'string' || !d.name.trim()) throw bad('"name" is required');
+            const bid = 'b-inbox-' + String(d.id || f.id).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+            if (!(await db.get('boards', bid)) && !remoteIds.has(bid)) {
+              const b = await buildInboxBoard(d, bid);
+              const now = Date.now(); Object.assign(b, { createdAt: now, updatedAt: now, dirty: true, deleted: false });
+              await db.put('boards', b);
+              notices.push(`New board “${b.name}” was created from your Drive inbox.`);
+            }
+          } else {
+            const rawId = d.id != null && String(d.id).trim() ? String(d.id).trim() : '';
+            const idem = rawId ? 'add-items:' + rawId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) : '';
+            if (!idem || !done.has(idem)) {
+              if (!applyInboxItems) throw bad('"type" must be "new-board" or "add-items"');
+              const b = await resolveInboxBoard(d.board, bad);
+              const added = await applyInboxItems(d, b, f.id);
+              if (added && added.length) {
+                b.items = (b.items || []).concat(added);
+                b.updatedAt = Date.now();
+                b.dirty = true;
+                await db.put('boards', b);
+                onBoardChanged && onBoardChanged(b.id);
+                const n = added.length, word = n === 1 ? 'note' : 'notes';
+                notices.push(`Added ${n} ${word} to “${b.name}” from your Drive inbox.`);
+              }
+              if (idem) done.add(idem);
+            }
           }
           done.add(f.id); await kv.set('inboxDone', [...done].slice(-300));
         }

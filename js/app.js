@@ -206,7 +206,7 @@ function newBoardFrom(tpl, name, rep = null) {
   const now = Date.now();
   return { id: uid('b-'), name: applyRep(name || tpl.name, rep), background: tpl.background || 'grid', ...(tpl.bgLocked ? { bgLocked: true } : {}), items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
 }
-// Drive inbox: a {"type":"new-board", ...} JSON file in Whiteboard/inbox becomes a board (see README).
+// Drive inbox: a {"type":"new-board", ...} or {"type":"add-items", ...} JSON file in Whiteboard/inbox (see README).
 async function makeInboxBoard(d, boardId) {
   const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
   const tpls = await allTemplates();
@@ -230,6 +230,55 @@ async function makeInboxBoard(d, boardId) {
   if (d.pinned) b.pinned = true;
   if (Array.isArray(d.tags) && d.tags.length) b.tags = d.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8);
   return b;
+}
+// Place a note in empty space near the centre of existing content, without overlapping anything.
+function placeFree(items, w, h) {
+  const hits = (a, b, pad = 16) => a.x < b.x + b.w + pad && a.x + a.w + pad > b.x && a.y < b.y + b.h + pad && a.y + a.h + pad > b.y;
+  const boxes = (items || []).map((it) => R.bounds(it));
+  const bb = R.boardBounds(items || []);
+  const cx = bb.x + bb.w / 2 - w / 2, cy = bb.y + bb.h / 2 - h / 2;
+  const free = (x, y) => !boxes.some((b) => hits({ x, y, w, h }, b));
+  if (free(cx, cy)) return { x: cx, y: cy };
+  const step = 40;
+  for (let r = 1; r <= 50; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = cx + dx * step, y = cy + dy * step;
+        if (free(x, y)) return { x, y };
+      }
+    }
+  }
+  return { x: bb.x, y: bb.y + bb.h + 24 };
+}
+// Drive inbox add-items: build sticky notes to append to an existing board. Skips ids already present.
+function makeInboxItems(d, board, fileId) {
+  const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
+  if (!Array.isArray(d.items) || !d.items.length) fail('"items" must be a non-empty array');
+  const existing = (board.items || []).slice();
+  const have = new Set(existing.map((it) => it.id));
+  const out = [];
+  const prefix = String(d.id || fileId || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  d.items.slice(0, 200).forEach((raw, i) => {
+    const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { text: String(raw ?? '') };
+    const typ = String(o.type || 'note').toLowerCase();
+    if (typ !== 'note') fail(`unsupported item type “${o.type}” (only "note" is supported)`);
+    const id = prefix ? `i-inbox-${prefix}-${i}` : uid('i-');
+    if (have.has(id)) return;
+    const w = Number.isFinite(+o.w) && +o.w > 0 ? +o.w : 200;
+    const h = Number.isFinite(+o.h) && +o.h > 0 ? +o.h : 160;
+    const placed = Number.isFinite(+o.x) && Number.isFinite(+o.y) ? { x: +o.x, y: +o.y } : placeFree(existing.concat(out), w, h);
+    const it = {
+      id, type: 'note', x: placed.x, y: placed.y, w, h,
+      text: String(o.text || ''),
+      color: /^#[0-9a-f]{6}$/i.test(o.color || '') ? o.color : '#fff59d',
+      fontSize: Number.isFinite(+o.fontSize) && +o.fontSize > 0 ? +o.fontSize : 20,
+    };
+    if (Array.isArray(o.tags) && o.tags.length) it.tags = o.tags.map(String).slice(0, 8);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(o.due || '')) it.due = o.due;
+    out.push(it); have.add(id);
+  });
+  return out;
 }
 async function createBoard(tpl, name) {
   const b = newBoardFrom(tpl, name);
@@ -1612,6 +1661,7 @@ async function boot() {
     onBoardChanged: (id) => { if (S.board && S.board.id === id) reloadCurrentFromDB(); },
     onBoardsListChanged: async () => { await refreshPending(); renderDrawer(); },
     buildInboxBoard: makeInboxBoard,
+    applyInboxItems: (d, board, fileId) => makeInboxItems(d, board, fileId),
   });
 
   await refreshPending();
@@ -1642,5 +1692,5 @@ async function boot() {
 }
 
 // Test / debugging hook (no secrets here).
-window.__wb = { S, PREF, P, readClip, copySelected, pasteClip, dictateNote, renderDrawer, setBoardMeta: (...a) => setBoardMeta(...a), makeInboxBoard: (...a) => makeInboxBoard(...a), startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
+window.__wb = { S, PREF, P, readClip, copySelected, pasteClip, dictateNote, renderDrawer, setBoardMeta: (...a) => setBoardMeta(...a), makeInboxBoard: (...a) => makeInboxBoard(...a), makeInboxItems: (...a) => makeInboxItems(...a), startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
 boot().catch((e) => { console.error(e); toast('Startup error: ' + e.message, { kind: 'error', ms: 0 }); });

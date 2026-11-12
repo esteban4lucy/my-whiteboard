@@ -57,7 +57,7 @@ Whiteboard/
 ├── images/      pictures you uploaded to boards
 ├── templates/   templates you saved ("<Name>.template.json"); copies of the 6 built-ins
 ├── documents/   optional: documents you upload from the app to link on boards
-├── inbox/       drop a {"type":"new-board",…} JSON file here → a board is created on the next sync (see §5)
+├── inbox/       drop a JSON file here → create a board or add items on the next sync (see §5)
 └── source/      the app's source code (zip + files) so you can edit/redeploy it
 ```
 
@@ -177,12 +177,13 @@ All of these can be undone, are saved in the board JSON and sync to your other d
 
 New boards made from a template fill in `{{date}}` with today's date (e.g. the Weekly Review title and the Meeting Notes date line).
 
-### Drive inbox: create boards from a JSON file
+### Drive inbox: create boards or add items from a JSON file
 
-Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devices syncs with the app open (on opening, every 60 s, or tap the status pill), the app:
-1. creates the board,
-2. uploads it to `boards/`,
-3. moves the inbox file to the Drive bin.
+Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devices syncs with the app open (on opening, every 60 s, or tap the status pill), the app processes it and moves the file to the Drive bin.
+
+**Create a board** (`"type": "new-board"`): the board is created and uploaded to `boards/`.
+
+**Add items to an existing board** (`"type": "add-items"`): sticky notes are added to the named board, which is then synced back to Drive.
 
 **File format.** Save it as a plain `.json` file with MIME type `application/json`, not as a Google Doc:
 
@@ -201,7 +202,7 @@ Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devi
 
 | Field | Required | Meaning |
 |---|---|---|
-| `type` | yes | Must be `"new-board"`. |
+| `type` | yes | Must be `"new-board"` (or `"add-items"`, below). |
 | `name` | yes | Board name. Replacements apply here too. |
 | `template` | no | Template name or id, case-insensitive: `Blank` (default), `Meeting Notes`, `Brainstorm`, `Project Plan`, `Kanban`, `Weekly Review`, or one of your saved templates. |
 | `replace` | no | `{ "text to find": "replacement" }`, applied to the name, note, text and frame titles. `{{date}}` defaults to today (e.g. "16 Nov 2026"). |
@@ -209,10 +210,33 @@ Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devi
 | `notes` | no | Extra sticky notes placed under the template, 4 per row. Each is a string or `{ "text", "color": "#rrggbb", "tags": [..], "due": "YYYY-MM-DD" }`. |
 | `tags`, `pinned` | no | Board tags and pin, shown in the board picker. |
 
-**Errors.** A file that can't be used (invalid JSON, missing `type`/`name`, unknown template) is **not** deleted. It is renamed `ERROR – <reason> – <original name>` and stays in `inbox/`. The app shows a notice, and later syncs skip that file. Fix it, then upload it again under a new name.
+#### Add items to an existing board
+
+```json
+{
+  "type": "add-items",
+  "board": "Index Whiteboard",
+  "id": "fizzy-water-2026-11-12",
+  "items": [
+    { "type": "note", "text": "one bottle of fizzy water", "x": -3664, "y": -690, "w": 200, "h": 160, "color": "#fff59d", "fontSize": 20 }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `type` | yes | Must be `"add-items"`. |
+| `board` | yes | Board id (preferred) or board name, case-insensitive. |
+| `id` | no, recommended | Idempotency key. The same `id` never adds the items a second time, even if the file is uploaded again. Without it, the Drive file id is used. |
+| `items` | yes | Non-empty array of sticky notes. Each may have `type` (`"note"`, the default), `text`, `x`, `y`, `w`, `h`, `color` (`#rrggbb`), `fontSize`, and optionally `tags` and `due` (`YYYY-MM-DD`). Defaults: 200×160, `#fff59d`, font size 20. If `x` or `y` is omitted, the note is placed in empty space near the centre of the board's existing content, without overlapping anything. |
+
+A notice such as *Added 1 note to “Index Whiteboard” from your Drive inbox.* is shown when items are added.
+
+**Errors.** A file that can't be used (invalid JSON, missing `type`/`name`/`board`/`items`, unknown template or board, unsupported item type) is **not** deleted. It is renamed `ERROR – <reason> – <original name>` and stays in `inbox/`. The app shows a notice, and later syncs skip that file. Fix it, then upload it again under a new name.
 
 **From a scheduled routine (Drive connector):** create a file named e.g. `weekly-review-2026-11-16.json` in the `inbox` folder (id below) with MIME type `application/json`. Turn off conversion to Google Docs (`disableConversionToGoogleType: true`). The content is the JSON above.
-* Minimal example: `{"type":"new-board","name":"Weekly Review – 2026-11-16","template":"Weekly Review","replace":{"{{date}}":"16 Nov 2026"},"id":"wr-2026-11-16"}`.
+* Minimal new-board example: `{"type":"new-board","name":"Weekly Review – 2026-11-16","template":"Weekly Review","replace":{"{{date}}":"16 Nov 2026"},"id":"wr-2026-11-16"}`.
+* Minimal add-items example: `{"type":"add-items","board":"Index Whiteboard","id":"fizzy-water-2026-11-12","items":[{"type":"note","text":"one bottle of fizzy water"}]}`.
 * `inbox` folder id: `1y9BREB2GW9A6vsqyhbkG88UopoYcbaVa`.
 
 ## 6. Offline and sync behaviour
@@ -268,7 +292,7 @@ These automated browser tests ran in headless Chrome with real touch events, wit
   * camera input, and dictation with a simulated speech engine plus the fallback;
   * thumbnails, pin, tags, chips and filter, synced to Drive;
   * smoothing, rectangle/ellipse/line/arrow recognition, scribbles left alone, the toggles, and undo back to the stroke;
-  * inbox: board creation from a template with replacements, extra notes, idempotency, files trashed, ERROR renames, unknown template, and the default `{{date}}`, also through the real Drive adapter.
+  * inbox: board creation from a template with replacements, extra notes, idempotency, files trashed, ERROR renames, unknown template, and the default `{{date}}`; add-items to an existing board (by id or name, defaults, auto-placement without overlap, idempotency, notices, ERROR cases), also through the real Drive adapter.
 * **Connectors, Kanban notes, frames, arrange & layers (desktop + 390 px phone):** arrows attach and follow notes, end handles detach and re-attach, Connect button, duplicated arrows stay wired to the copies, column snapping (centring, stacking, on/off), tags and due dates, checklist ticking, search by tag, PNG export, frames carry their contents, collapse/expand, put in a frame, mini-map jump, present mode (keys, buttons, swipe), align and distribute, snap to grid, layer order, background layer and its lock, undo for every action, persistence through Drive sync, and older boards.
 * **Lock, group & text format (desktop + 390 px phone):** Shift-click and box-select, phone multi-select mode, group move/resize, lock/unlock (incl. long-press on phone and *Unlock all*), locked items can't be moved, erased or deleted, Ctrl+A/G/L/B/I, text size/colour/bold/italic, undo/redo of every action, persistence through Drive sync and reload, PNG/PDF export, the Kanban template, and older boards without the new fields.
 * **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.

@@ -115,7 +115,11 @@ async function run(mail, allowed) {
   mk('inb2', 'oops.json', '{"type":"new-board"}');
   await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
   const nb = await p.evaluate(() => __wb.db.get('boards', 'b-inbox-wr-2026-11-16'));
+
   ok('Inbox (real adapter): JSON file → board, file trashed, bad file renamed ERROR', nb && nb.name === 'Weekly Review – 16 Nov 2026' && files.get('inb1').trashed === true && files.get('inb2').name.startsWith('ERROR – "name" is required') && !files.get('inb2').trashed && [...files.values()].some((f) => f.appProperties.boardId === 'b-inbox-wr-2026-11-16' && !f.trashed), files.get('inb2').name);
+  mk('inb3', 'add.json', JSON.stringify({ type: 'add-items', board: 'My first board', id: 'add-real-1', items: [{ type: 'note', text: 'inbox note', x: 40, y: 200, w: 200, h: 160, color: '#fff59d', fontSize: 20 }] }));
+  await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  ok('Inbox add-items (real adapter): note added, file trashed', files.get('inb3').trashed === true && (await p.evaluate(() => __wb.S.board.items.some((i) => i.text === 'inbox note'))), files.get('inb3').trashed + ' / ' + (await p.evaluate(() => __wb.S.board.items.map((i) => i.text).join(','))));
   // versions + prune via real adapter
   for (let i = 0; i < 7; i++) await p.evaluate(() => __wb.sync.saveVersion(__wb.S.board, 'manual'));
   const vers = [...files.values()].filter((f) => f.parents[0] !== ROOT && files.get(f.parents[0])?.name === 'versions' && !/Weekly Review/.test(f.name) && f.appProperties.boardId !== 'b-inbox-wr-2026-11-16');

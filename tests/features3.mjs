@@ -1,5 +1,5 @@
 // Batch 3: copy/paste/duplicate across boards (incl. clipboard pictures), camera capture + dictated notes,
-// board picker (thumbnails, pins, tags, filter), handwriting smoothing + shape recognition, Drive inbox – desktop + 390px phone.
+// board picker (thumbnails, pins, tags, filter), handwriting smoothing + shape recognition, Drive inbox (new-board + add-items) – desktop + 390px phone.
 import { chromium } from 'playwright-core';
 const BASE = 'http://127.0.0.1:8765/my-whiteboard/';
 const res = []; const ok = (n, c, i = '') => { res.push([c ? 'PASS' : 'FAIL', n, i]); console.log(c ? 'PASS' : 'FAIL', n, i); };
@@ -194,8 +194,58 @@ const mockSR = () => {
   await p.click('#btnBoards'); await p.waitForTimeout(200);
   ok('Inbox board shows in the picker (pinned)', await p.isVisible('.board-row[data-board="b-inbox-weekly-2026-11-16"]'));
   await p.click('.board-row[data-board="b-inbox-weekly-2026-11-16"] .board-open'); await p.waitForTimeout(300);
+
   ok('Inbox board opens', (await ev(() => __wb.S.board.name)) === 'Weekly Review – 16 Nov 2026');
+  // add-items: append sticky notes to an existing board
+  const shopId = await blank('Shopping', [
+    { id: 'h1', type: 'text', x: 0, y: 0, w: 200, h: 40, text: 'SHOPPING', fontSize: 28, color: 'ink' },
+    { id: 'n-tail', type: 'note', x: 20, y: 80, w: 200, h: 160, text: 'tailleur paris london', color: '#fff59d', fontSize: 20 },
+  ]);
+  const shopBefore = await ev((id) => __wb.db.get('boards', id), shopId);
+  await inbox('fizzy.json', JSON.stringify({ type: 'add-items', board: shopId, id: 'fizzy-water-test', items: [{ type: 'note', text: 'one bottle of fizzy water', x: 20, y: 260, w: 200, h: 160, color: '#fff59d', fontSize: 20 }] }));
+  await doSync();
+  let shop = await ev((id) => __wb.db.get('boards', id), shopId);
+  const fizzy = shop.items.find((i) => i.text === 'one bottle of fizzy water');
+  ok('add-items: note is added at the given position with the given style', !!(fizzy && fizzy.type === 'note' && fizzy.x === 20 && fizzy.y === 260 && fizzy.w === 200 && fizzy.h === 160 && fizzy.color === '#fff59d' && fizzy.fontSize === 20), JSON.stringify(fizzy));
+  ok('add-items: the board\'s updatedAt is bumped so the change syncs back to Drive', shop.updatedAt > shopBefore.updatedAt, `${shopBefore.updatedAt} → ${shop.updatedAt}`);
+  files = await ev(() => __wb.adapter._all());
+  ok('add-items: processed file is moved to the Drive bin', files.filter((f) => f.folder === 'inbox' && f.name === 'fizzy.json').every((f) => f.trashed));
+  ok('add-items: the updated board is uploaded to Drive boards/', files.some((f) => f.folder === 'boards' && !f.trashed && (() => { try { const d = JSON.parse(f.content); return d.id === shopId && d.items.some((i) => i.text === 'one bottle of fizzy water'); } catch { return false; } })()));
+  const nFizzy = shop.items.filter((i) => i.text === 'one bottle of fizzy water').length;
+  await inbox('fizzy-again.json', JSON.stringify({ type: 'add-items', board: shopId, id: 'fizzy-water-test', items: [{ type: 'note', text: 'one bottle of fizzy water', x: 20, y: 260 }] }));
+  await doSync();
+  shop = await ev((id) => __wb.db.get('boards', id), shopId);
+  ok('add-items is idempotent: the same "id" does not add a second note', shop.items.filter((i) => i.text === 'one bottle of fizzy water').length === nFizzy, `${nFizzy} → ${shop.items.filter((i) => i.text === 'one bottle of fizzy water').length}`);
+  files = await ev(() => __wb.adapter._all());
+  ok('…and the duplicate add-items file is still cleaned up', files.filter((f) => f.folder === 'inbox' && f.name === 'fizzy-again.json').every((f) => f.trashed));
+  await inbox('milk.json', JSON.stringify({ type: 'add-items', board: 'shopping', id: 'milk-test', items: [{ text: 'oat milk' }] }));
+  await doSync();
+  shop = await ev((id) => __wb.db.get('boards', id), shopId);
+  const milk = shop.items.find((i) => i.text === 'oat milk');
+  ok('add-items matches the board by name (case-insensitive) and fills defaults (200×160, #fff59d, font 20)', !!(milk && milk.type === 'note' && milk.w === 200 && milk.h === 160 && milk.color === '#fff59d' && milk.fontSize === 20), JSON.stringify(milk));
+  const overlap = (a, b) => a.x < b.x + (b.w || 1) && a.x + a.w > b.x && a.y < b.y + (b.h || 1) && a.y + a.h > b.y;
+  ok('auto-placed note does not overlap existing items', !!(milk && shop.items.filter((i) => i.id !== milk.id).every((i) => !overlap(milk, { x: i.x ?? Math.min(i.x1 || 0, i.x2 || 0), y: i.y ?? Math.min(i.y1 || 0, i.y2 || 0), w: i.w || Math.abs((i.x2 || 0) - (i.x1 || 0)) || 1, h: i.h || Math.abs((i.y2 || 0) - (i.y1 || 0)) || 1 }))), milk && JSON.stringify([milk.x, milk.y]));
+  const others = shop.items.filter((i) => i.id !== milk.id);
+  const minX = Math.min(...others.map((i) => i.x ?? 0)), maxX = Math.max(...others.map((i) => (i.x ?? 0) + (i.w || 200)));
+  const minY = Math.min(...others.map((i) => i.y ?? 0)), maxY = Math.max(...others.map((i) => (i.y ?? 0) + (i.h || 40)));
+  ok('auto-placed note sits near the centre of existing content', !!(milk && milk.x + milk.w / 2 >= minX - 240 && milk.x + milk.w / 2 <= maxX + 240 && milk.y + milk.h / 2 >= minY - 240 && milk.y + milk.h / 2 <= maxY + 240), milk && JSON.stringify({ milk: [milk.x, milk.y], box: [minX, minY, maxX, maxY] }));
+  await ev((id) => __wb.openBoard(id), shopId); await p.waitForTimeout(200);
+  await inbox('open.json', JSON.stringify({ type: 'add-items', board: shopId, id: 'open-board-test', items: [{ type: 'note', text: 'visible now', x: 400, y: 0 }] }));
+  await doSync();
+  ok('add-items to the open board appears without a reload', (await items()).some((i) => i.text === 'visible now'));
+  const toastTxt = await p.evaluate(() => (document.getElementById('toasts') || document.body).textContent);
+  ok('add-items shows a notice naming the board', /Added 1 note to “Shopping” from your Drive inbox/.test(toastTxt), toastTxt && toastTxt.slice(0, 300));
+  await inbox('no-board.json', JSON.stringify({ type: 'add-items', items: [{ text: 'x' }] }));
+  await inbox('missing-board.json', JSON.stringify({ type: 'add-items', board: 'No Such Board', items: [{ text: 'x' }] }));
+  await inbox('no-items.json', JSON.stringify({ type: 'add-items', board: shopId, items: [] }));
+  await doSync();
+  files = await ev(() => __wb.adapter._all());
+  const addErr = files.filter((f) => f.folder === 'inbox' && !f.trashed).map((f) => f.name);
+  ok('add-items without "board" is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('"board" is required') && n.endsWith('no-board.json')), JSON.stringify(addErr));
+  ok('add-items to an unknown board is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('was not found') && n.endsWith('missing-board.json')), JSON.stringify(addErr));
+  ok('add-items with empty items is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('"items" must be a non-empty array') && n.endsWith('no-items.json')), JSON.stringify(addErr));
   await p.screenshot({ path: '/tmp/f3-desk.png' });
+
   // a template edited on Drive (e.g. the updated Weekly Review copy) reaches devices that already have it
   const tf = await ev(() => __wb.adapter.createFile('templates', 'Mine.template.json', { app: 'my-whiteboard', kind: 'template', id: 'tpl-mine', name: 'Mine', items: [] }, 'application/json'));
   await doSync(); ok('Template from Drive is pulled', (await ev(() => __wb.db.get('templates', 'tpl-mine').then((t) => t && t.items.length))) === 0);
@@ -260,8 +310,14 @@ const mockSR = () => {
   ok('Phone: tap ★ pins the board', (await ev((id) => __wb.db.get('boards', id).then((r) => r.pinned), A)) === true && (await p.locator('#boardList .board-row').first().getAttribute('data-board')) === A);
   await tapEl('.tag-chip[data-tag="★"]'); ok('Phone: Pinned chip filters', (await p.locator('#boardList .board-row').count()) === 1);
   await p.screenshot({ path: '/tmp/f3-phone-drawer.png' });
+
   await tapEl('.tag-chip[data-tag=""]');
+  await ev(() => __wb.adapter.createFile('inbox', 'phone-add.json', JSON.stringify({ type: 'add-items', board: 'Phone B', id: 'phone-add-1', items: [{ type: 'note', text: 'from inbox', x: 0, y: 200 }] }), 'application/json'));
+  await ev(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  const pb = await ev(() => __wb.db.all('boards').then((a) => a.find((b) => b.name === 'Phone B')));
+  ok('Phone: add-items inbox note lands on the board', !!(pb && pb.items.some((i) => i.text === 'from inbox')), pb && JSON.stringify(pb.items.map((i) => i.text)));
   await ctx.close();
+
 }
 
 await b.close();
