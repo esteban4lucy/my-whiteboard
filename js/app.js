@@ -206,7 +206,7 @@ function newBoardFrom(tpl, name, rep = null) {
   const now = Date.now();
   return { id: uid('b-'), name: applyRep(name || tpl.name, rep), background: tpl.background || 'grid', ...(tpl.bgLocked ? { bgLocked: true } : {}), items: fresh, createdAt: now, updatedAt: now, dirty: true, deleted: false };
 }
-// Drive inbox: a {"type":"new-board", ...} or {"type":"add-items", ...} JSON file in Whiteboard/inbox (see README).
+// Drive inbox: a {"type":"new-board"|"add-items"|"update-items", ...} JSON file in Whiteboard/inbox (see README).
 async function makeInboxBoard(d, boardId) {
   const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
   const tpls = await allTemplates();
@@ -252,6 +252,7 @@ function placeFree(items, w, h) {
   return { x: bb.x, y: bb.y + bb.h + 24 };
 }
 // Drive inbox add-items: build sticky notes to append to an existing board. Skips ids already present.
+// An item may carry an explicit "id" (must start with "i-"); otherwise the default i-inbox-<file id>-<n> is used.
 function makeInboxItems(d, board, fileId) {
   const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
   if (!Array.isArray(d.items) || !d.items.length) fail('"items" must be a non-empty array');
@@ -263,7 +264,13 @@ function makeInboxItems(d, board, fileId) {
     const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { text: String(raw ?? '') };
     const typ = String(o.type || 'note').toLowerCase();
     if (typ !== 'note') fail(`unsupported item type “${o.type}” (only "note" is supported)`);
-    const id = prefix ? `i-inbox-${prefix}-${i}` : uid('i-');
+    let id;
+    if (o.id != null && String(o.id).trim()) {
+      id = String(o.id).trim();
+      if (!id.startsWith('i-')) fail('item "id" must start with "i-"');
+    } else {
+      id = prefix ? `i-inbox-${prefix}-${i}` : uid('i-');
+    }
     if (have.has(id)) return;
     const w = Number.isFinite(+o.w) && +o.w > 0 ? +o.w : 200;
     const h = Number.isFinite(+o.h) && +o.h > 0 ? +o.h : 160;
@@ -279,6 +286,57 @@ function makeInboxItems(d, board, fileId) {
     out.push(it); have.add(id);
   });
   return out;
+}
+// Drive inbox update-items: patch fields provided on existing items (matched by id). Optional upsert: true creates a missing note with that exact id.
+function applyInboxUpdates(d, board, fileId) {
+  const fail = (m) => { const e = new Error(m); e.inbox = true; throw e; };
+  if (!Array.isArray(d.items) || !d.items.length) fail('"items" must be a non-empty array');
+  if (!board.items) board.items = [];
+  const byId = new Map(board.items.map((it) => [it.id, it]));
+  const patched = [], upserted = [], missing = [];
+  d.items.slice(0, 200).forEach((raw, i) => {
+    const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+    if (!o) fail(`items[${i}] must be an object with an "id"`);
+    const id = o.id != null ? String(o.id).trim() : '';
+    if (!id) fail('each item needs an "id"');
+    let it = byId.get(id);
+    if (!it) {
+      if (o.upsert === true) {
+        const typ = String(o.type || 'note').toLowerCase();
+        if (typ !== 'note') fail(`unsupported item type “${o.type}” (only "note" is supported)`);
+        const w = Number.isFinite(+o.w) && +o.w > 0 ? +o.w : 200;
+        const h = Number.isFinite(+o.h) && +o.h > 0 ? +o.h : 160;
+        const placed = Number.isFinite(+o.x) && Number.isFinite(+o.y) ? { x: +o.x, y: +o.y } : placeFree(board.items, w, h);
+        it = {
+          id, type: 'note', x: placed.x, y: placed.y, w, h,
+          text: String(o.text || ''),
+          color: /^#[0-9a-f]{6}$/i.test(o.color || '') ? o.color : '#fff59d',
+          fontSize: Number.isFinite(+o.fontSize) && +o.fontSize > 0 ? +o.fontSize : 20,
+        };
+        if (Array.isArray(o.tags) && o.tags.length) it.tags = o.tags.map(String).slice(0, 8);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(o.due || '')) it.due = o.due;
+        board.items.push(it); byId.set(id, it); upserted.push(it);
+      } else {
+        missing.push(id);
+      }
+      return;
+    }
+    if ('text' in o) it.text = String(o.text ?? '');
+    if ('color' in o && /^#[0-9a-f]{6}$/i.test(o.color || '')) it.color = o.color;
+    if ('fontSize' in o && Number.isFinite(+o.fontSize) && +o.fontSize > 0) it.fontSize = +o.fontSize;
+    if ('tags' in o && Array.isArray(o.tags)) {
+      if (o.tags.length) it.tags = o.tags.map(String).slice(0, 8);
+      else delete it.tags;
+    }
+    if ('due' in o && /^\d{4}-\d{2}-\d{2}$/.test(o.due || '')) it.due = o.due;
+    if ('x' in o && Number.isFinite(+o.x)) it.x = +o.x;
+    if ('y' in o && Number.isFinite(+o.y)) it.y = +o.y;
+    if ('w' in o && Number.isFinite(+o.w) && +o.w > 0) it.w = +o.w;
+    if ('h' in o && Number.isFinite(+o.h) && +o.h > 0) it.h = +o.h;
+    patched.push(it);
+  });
+  if (!patched.length && !upserted.length) fail('none of the item ids were found');
+  return { patched, upserted, missing };
 }
 async function createBoard(tpl, name) {
   const b = newBoardFrom(tpl, name);
@@ -1662,6 +1720,7 @@ async function boot() {
     onBoardsListChanged: async () => { await refreshPending(); renderDrawer(); },
     buildInboxBoard: makeInboxBoard,
     applyInboxItems: (d, board, fileId) => makeInboxItems(d, board, fileId),
+    applyInboxUpdates: (d, board, fileId) => applyInboxUpdates(d, board, fileId),
   });
 
   await refreshPending();
@@ -1692,5 +1751,5 @@ async function boot() {
 }
 
 // Test / debugging hook (no secrets here).
-window.__wb = { S, PREF, P, readClip, copySelected, pasteClip, dictateNote, renderDrawer, setBoardMeta: (...a) => setBoardMeta(...a), makeInboxBoard: (...a) => makeInboxBoard(...a), makeInboxItems: (...a) => makeInboxItems(...a), startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
+window.__wb = { S, PREF, P, readClip, copySelected, pasteClip, dictateNote, renderDrawer, setBoardMeta: (...a) => setBoardMeta(...a), makeInboxBoard: (...a) => makeInboxBoard(...a), makeInboxItems: (...a) => makeInboxItems(...a), applyInboxUpdates: (...a) => applyInboxUpdates(...a), startPresent, stopPresent, goSlide, alignSelected, setBgLocked, framesSorted, get adapter() { return adapter; }, get sync() { return sync; }, db, kv, openBoard, createBoard, setTool, setSel, selItems, commit, save, undo, redo, refreshPending, BUILTIN_TEMPLATES, toWorld, toScreen, saveChainDone: () => saveChain };
 boot().catch((e) => { console.error(e); toast('Startup error: ' + e.message, { kind: 'error', ms: 0 }); });

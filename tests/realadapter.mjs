@@ -120,6 +120,12 @@ async function run(mail, allowed) {
   mk('inb3', 'add.json', JSON.stringify({ type: 'add-items', board: 'My first board', id: 'add-real-1', items: [{ type: 'note', text: 'inbox note', x: 40, y: 200, w: 200, h: 160, color: '#fff59d', fontSize: 20 }] }));
   await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
   ok('Inbox add-items (real adapter): note added, file trashed', files.get('inb3').trashed === true && (await p.evaluate(() => __wb.S.board.items.some((i) => i.text === 'inbox note'))), files.get('inb3').trashed + ' / ' + (await p.evaluate(() => __wb.S.board.items.map((i) => i.text).join(','))));
+  mk('inb4', 'upd.json', JSON.stringify({ type: 'update-items', board: 'My first board', id: 'upd-real-1', items: [{ id: 'i-inbox-add-real-1-0', text: 'inbox note updated' }] }));
+  await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  ok('Inbox update-items (real adapter): note text patched, position kept, file trashed', files.get('inb4').trashed === true && (await p.evaluate(() => { const it = __wb.S.board.items.find((i) => i.id === 'i-inbox-add-real-1-0'); return it && it.text === 'inbox note updated' && it.x === 40 && it.y === 200; })), files.get('inb4').trashed + ' / ' + (await p.evaluate(() => __wb.S.board.items.map((i) => i.id + ':' + i.text).join(','))));
+  mk('inb5', 'ERROR – "type" must be "new-board" or "add-items" – late.json', JSON.stringify({ type: 'update-items', board: 'My first board', id: 'upd-real-retry', items: [{ id: 'i-inbox-add-real-1-0', text: 'from retried file' }] }));
+  await p.evaluate(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  ok('Inbox retries ERROR – "type" must be … (real adapter)', files.get('inb5').trashed === true && (await p.evaluate(() => __wb.S.board.items.some((i) => i.text === 'from retried file'))), files.get('inb5').trashed + ' / ' + (files.get('inb5').name || '') + ' / ' + (await p.evaluate(() => __wb.S.board.items.map((i) => i.text).join(','))));
   // versions + prune via real adapter
   for (let i = 0; i < 7; i++) await p.evaluate(() => __wb.sync.saveVersion(__wb.S.board, 'manual'));
   const vers = [...files.values()].filter((f) => f.parents[0] !== ROOT && files.get(f.parents[0])?.name === 'versions' && !/Weekly Review/.test(f.name) && f.appProperties.boardId !== 'b-inbox-wr-2026-11-16');

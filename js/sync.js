@@ -17,7 +17,7 @@ async function imageMap(b) {
 const safeName = (s) => String(s || 'Untitled').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
 const fileName = (b) => `${safeName(b.name)}.board.json`;
 
-export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged, buildInboxBoard, applyInboxItems }) {
+export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, onBoardsListChanged, buildInboxBoard, applyInboxItems, applyInboxUpdates }) {
   let running = null, again = false, timer = null;
   const maxVersions = cfg.MAX_VERSIONS || 5;
   const versionGapMs = (cfg.VERSION_INTERVAL_MINUTES ?? 10) * 60_000;
@@ -199,9 +199,10 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
     }
   }
 
-  // Drive inbox (Whiteboard/inbox): JSON files create a board or add items, then go to the Drive bin.
-  // Idempotent: new-board id is derived from the file's "id"; add-items uses inboxDone plus the file's "id",
-  // and deterministic item ids, so the same item is never added twice.
+  // Drive inbox (Whiteboard/inbox): JSON files create a board, add items, or update items, then go to the Drive bin.
+  // Idempotent: new-board id is derived from the file's "id"; add-items / update-items use inboxDone plus the file's "id",
+  // and deterministic item ids, so the same change is never applied twice.
+  // Files renamed ERROR – "type" must be … by an older app version are retried once (prefix stripped).
   async function resolveInboxBoard(ref, bad) {
     const key = String(ref || '').trim();
     if (!key) throw bad('"board" is required (board name or id)');
@@ -234,17 +235,23 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
   }
   async function processInbox(notices) {
     if (!buildInboxBoard) return;
-    const files = (await adapter.listFiles('inbox')).filter((f) => !/^ERROR/i.test(f.name)).sort((a, b) => String(a.createdTime || a.name).localeCompare(String(b.createdTime || b.name)));
+    const typeErrorName = (n) => /^ERROR – "type" must be/i.test(n);
+    const stripTypeError = (n) => n.replace(/^ERROR – "type" must be.*? – /i, '');
+    const files = (await adapter.listFiles('inbox')).filter((f) => !/^ERROR/i.test(f.name) || typeErrorName(f.name)).sort((a, b) => String(a.createdTime || a.name).localeCompare(String(b.createdTime || b.name)));
     if (!files.length) return;
     const remoteIds = new Set((await adapter.listFiles('boards')).map((r) => r.appProperties && r.appProperties.boardId).filter(Boolean));
     const done = new Set(await kv.get('inboxDone', []));
+    const typeErr = '"type" must be "new-board", "add-items" or "update-items"';
     for (const f of files) {
+      const displayName = typeErrorName(f.name) ? stripTypeError(f.name) : f.name;
+      const retryKey = typeErrorName(f.name) ? 'inbox-retry:' + f.id : '';
       try {
+        if (retryKey && done.has(retryKey)) continue;
         if (!done.has(f.id)) {
           let d;
           try { d = await adapter.readJSON(f.id); } catch (e) { if (e instanceof SyntaxError) { e.inbox = true; e.message = 'not valid JSON'; } throw e; }
           const bad = (m) => { const e = new Error(m); e.inbox = true; return e; };
-          if (!d || typeof d !== 'object' || (d.type !== 'new-board' && d.type !== 'add-items')) throw bad('"type" must be "new-board" or "add-items"');
+          if (!d || typeof d !== 'object' || (d.type !== 'new-board' && d.type !== 'add-items' && d.type !== 'update-items')) throw bad(typeErr);
           if (d.type === 'new-board') {
             if (typeof d.name !== 'string' || !d.name.trim()) throw bad('"name" is required');
             const bid = 'b-inbox-' + String(d.id || f.id).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
@@ -254,11 +261,11 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
               await db.put('boards', b);
               notices.push(`New board “${b.name}” was created from your Drive inbox.`);
             }
-          } else {
+          } else if (d.type === 'add-items') {
             const rawId = d.id != null && String(d.id).trim() ? String(d.id).trim() : '';
             const idem = rawId ? 'add-items:' + rawId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) : '';
             if (!idem || !done.has(idem)) {
-              if (!applyInboxItems) throw bad('"type" must be "new-board" or "add-items"');
+              if (!applyInboxItems) throw bad(typeErr);
               const b = await resolveInboxBoard(d.board, bad);
               const added = await applyInboxItems(d, b, f.id);
               if (added && added.length) {
@@ -272,14 +279,38 @@ export function createSync({ adapter, cfg, onStatus, onNotice, onBoardChanged, o
               }
               if (idem) done.add(idem);
             }
+          } else {
+            const rawId = d.id != null && String(d.id).trim() ? String(d.id).trim() : '';
+            const idem = rawId ? 'update-items:' + rawId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) : '';
+            if (!idem || !done.has(idem)) {
+              if (!applyInboxUpdates) throw bad(typeErr);
+              const b = await resolveInboxBoard(d.board, bad);
+              const result = await applyInboxUpdates(d, b, f.id);
+              const n = result ? result.patched.length + result.upserted.length : 0;
+              if (n) {
+                b.updatedAt = Date.now();
+                b.dirty = true;
+                await db.put('boards', b);
+                onBoardChanged && onBoardChanged(b.id);
+                const word = n === 1 ? 'note' : 'notes';
+                let msg = `Updated ${n} ${word} on “${b.name}” from your Drive inbox.`;
+                if (result.missing.length) {
+                  const m = result.missing.length;
+                  msg += ` ${m} ${m === 1 ? 'item was' : 'items were'} not found and skipped.`;
+                }
+                notices.push(msg);
+              }
+              if (idem) done.add(idem);
+            }
           }
-          done.add(f.id); await kv.set('inboxDone', [...done].slice(-300));
+          done.add(f.id); if (retryKey) done.add(retryKey); await kv.set('inboxDone', [...done].slice(-300));
         }
         await adapter.trash(f.id); // processed: moved to the Drive bin (recoverable for 30 days)
       } catch (e) {
         if (!e.inbox) throw e; // network / auth problems: retry on the next sync
-        try { await adapter.renameFile(f.id, `ERROR – ${e.message} – ${f.name}`.slice(0, 250)); } catch { /* ignore */ }
-        notices.push(`Drive inbox: “${f.name}” was skipped: ${e.message}. It was renamed “ERROR – …” – fix it and upload it again.`);
+        if (retryKey) { done.add(retryKey); await kv.set('inboxDone', [...done].slice(-300)); }
+        try { await adapter.renameFile(f.id, `ERROR – ${e.message} – ${displayName}`.slice(0, 250)); } catch { /* ignore */ }
+        notices.push(`Drive inbox: “${displayName}” was skipped: ${e.message}. It was renamed “ERROR – …” – fix it and upload it again.`);
       }
     }
   }

@@ -1,5 +1,5 @@
 // Batch 3: copy/paste/duplicate across boards (incl. clipboard pictures), camera capture + dictated notes,
-// board picker (thumbnails, pins, tags, filter), handwriting smoothing + shape recognition, Drive inbox (new-board + add-items) – desktop + 390px phone.
+// board picker (thumbnails, pins, tags, filter), handwriting smoothing + shape recognition, Drive inbox (new-board + add-items + update-items) – desktop + 390px phone.
 import { chromium } from 'playwright-core';
 const BASE = 'http://127.0.0.1:8765/my-whiteboard/';
 const res = []; const ok = (n, c, i = '') => { res.push([c ? 'PASS' : 'FAIL', n, i]); console.log(c ? 'PASS' : 'FAIL', n, i); };
@@ -244,6 +244,90 @@ const mockSR = () => {
   ok('add-items without "board" is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('"board" is required') && n.endsWith('no-board.json')), JSON.stringify(addErr));
   ok('add-items to an unknown board is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('was not found') && n.endsWith('missing-board.json')), JSON.stringify(addErr));
   ok('add-items with empty items is reported', addErr.some((n) => n.startsWith('ERROR') && n.includes('"items" must be a non-empty array') && n.endsWith('no-items.json')), JSON.stringify(addErr));
+
+  // update-items: patch existing notes (and add-items explicit ids + ERROR type retry)
+  const updId = await blank('Updates', [
+    { id: 'i-keep-pos', type: 'note', x: 50, y: 80, w: 220, h: 180, text: 'old text', color: '#fff59d', fontSize: 20, tags: ['old'] },
+    { id: 'i-other', type: 'note', x: 400, y: 80, w: 200, h: 160, text: 'leave me', color: '#b3e5fc', fontSize: 18 },
+  ]);
+  const seed = await ev((id) => __wb.db.get('boards', id).then((b) => ({ updatedAt: b.updatedAt, keep: b.items.find((i) => i.text === 'old text'), other: b.items.find((i) => i.text === 'leave me') })), updId);
+  const keepId = seed.keep.id, otherId = seed.other.id;
+  await ev((id) => __wb.openBoard(id), updId); await p.waitForTimeout(200);
+  await inbox('upd.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-text-1', items: [{ id: keepId, text: 'new text', color: '#c8e6c9', fontSize: 24, tags: ['new'], due: '2026-12-01' }] }));
+  await doSync();
+  let upd = await ev((id) => __wb.db.get('boards', id), updId);
+  let keep = upd.items.find((i) => i.id === keepId);
+  const other0 = upd.items.find((i) => i.id === otherId);
+  ok('update-items: patches only the given fields and keeps position/size', !!(keep && keep.text === 'new text' && keep.color === '#c8e6c9' && keep.fontSize === 24 && keep.tags && keep.tags[0] === 'new' && keep.due === '2026-12-01' && keep.x === 50 && keep.y === 80 && keep.w === 220 && keep.h === 180), JSON.stringify(keep));
+  ok('update-items: other items are left alone', !!(other0 && other0.text === 'leave me' && other0.color === '#b3e5fc'), JSON.stringify(other0));
+  ok('update-items: the board\'s updatedAt is bumped so the change syncs back to Drive', upd.updatedAt > seed.updatedAt, `${seed.updatedAt} → ${upd.updatedAt}`);
+  files = await ev(() => __wb.adapter._all());
+  ok('update-items: processed file is moved to the Drive bin', files.some((f) => f.folder === 'inbox' && f.name === 'upd.json' && f.trashed), JSON.stringify(files.filter((f) => f.folder === 'inbox').map((f) => f.name + (f.trashed ? ':trashed' : ''))));
+  ok('update-items: the updated board is uploaded to Drive boards/', files.some((f) => f.folder === 'boards' && !f.trashed && (() => { try { const d = JSON.parse(f.content); return d.id === updId && d.items.some((i) => i.id === keepId && i.text === 'new text'); } catch { return false; } })()));
+  ok('update-items to the open board appears without a reload', (await items()).some((i) => i.id === keepId && i.text === 'new text'));
+  const toastUpd = await p.evaluate(() => (document.getElementById('toasts') || document.body).textContent);
+  ok('update-items shows a notice naming the board', /Updated 1 note on “Updates” from your Drive inbox/.test(toastUpd), toastUpd && toastUpd.slice(0, 400));
+  await inbox('upd-again.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-text-1', items: [{ id: keepId, text: 'should not apply' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('update-items is idempotent: the same "id" does not apply a second time', (upd.items.find((i) => i.id === keepId) || {}).text === 'new text', JSON.stringify((upd.items || []).map((i) => i.id + ':' + i.text)));
+  files = await ev(() => __wb.adapter._all());
+  ok('…and the duplicate update-items file is still cleaned up', files.filter((f) => f.folder === 'inbox' && f.name === 'upd-again.json').every((f) => f.trashed));
+  await inbox('upd-partial.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-partial-1', items: [{ id: keepId, text: 'partial ok' }, { id: 'i-does-not-exist', text: 'nope' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('update-items skips unknown ids and still patches the ones it found', upd.items.find((i) => i.id === keepId).text === 'partial ok' && !upd.items.some((i) => i.id === 'i-does-not-exist'));
+  const toastSkip = await p.evaluate(() => (document.getElementById('toasts') || document.body).textContent);
+  ok('update-items mentions skipped ids in the notice', /Updated 1 note on “Updates” from your Drive inbox/.test(toastSkip) && /1 item was not found and skipped/.test(toastSkip), toastSkip && toastSkip.slice(0, 500));
+  await inbox('upd-none.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-none-1', items: [{ id: 'i-missing', text: 'x' }] }));
+  await doSync();
+  files = await ev(() => __wb.adapter._all());
+  const updErr = files.filter((f) => f.folder === 'inbox' && !f.trashed).map((f) => f.name);
+  ok('update-items with no matching ids is reported', updErr.some((n) => n.startsWith('ERROR') && n.includes('none of the item ids were found') && n.endsWith('upd-none.json')), JSON.stringify(updErr));
+  const nBeforeUpsert = upd.items.length;
+  await inbox('upd-upsert.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-upsert-1', items: [{ id: 'i-brand-new', upsert: true, text: 'created by upsert' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  const created = upd.items.find((i) => i.id === 'i-brand-new');
+  ok('update-items upsert: true creates a missing note with that exact id, auto-placed', !!(created && created.type === 'note' && created.text === 'created by upsert' && created.w === 200 && created.h === 160 && Number.isFinite(created.x) && Number.isFinite(created.y) && upd.items.length === nBeforeUpsert + 1), JSON.stringify(created));
+  await inbox('upd-by-name.json', JSON.stringify({ type: 'update-items', board: 'Updates', id: 'upd-by-name-1', items: [{ id: otherId, text: 'renamed by name' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('update-items matches the board by name (case-insensitive)', upd.items.find((i) => i.id === otherId).text === 'renamed by name');
+  await inbox('upd-move.json', JSON.stringify({ type: 'update-items', board: updId, id: 'upd-move-1', items: [{ id: keepId, x: 999, y: 888, w: 120, h: 90 }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  keep = upd.items.find((i) => i.id === keepId);
+  ok('update-items applies position/size only when given', !!(keep && keep.x === 999 && keep.y === 888 && keep.w === 120 && keep.h === 90 && keep.text === 'partial ok'), JSON.stringify(keep));
+  await inbox('stable-id.json', JSON.stringify({ type: 'add-items', board: updId, id: 'stable-add-1', items: [{ id: 'i-stable-note', text: 'stable id' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('add-items uses an explicit item id when it starts with "i-"', !!(upd.items.some((i) => i.id === 'i-stable-note' && i.text === 'stable id')));
+  await inbox('default-id.json', JSON.stringify({ type: 'add-items', board: updId, id: 'default-add-1', items: [{ text: 'default id note' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('add-items without an item id still uses the i-inbox- prefix', !!(upd.items.some((i) => i.id === 'i-inbox-default-add-1-0' && i.text === 'default id note')), upd.items.filter((i) => /default/.test(i.id) || /default/.test(i.text)).map((i) => i.id + ':' + i.text).join(','));
+  await inbox('bad-id.json', JSON.stringify({ type: 'add-items', board: updId, id: 'bad-id-1', items: [{ id: 'nope', text: 'x' }] }));
+  await doSync();
+  files = await ev(() => __wb.adapter._all());
+  const badIdErr = files.filter((f) => f.folder === 'inbox' && !f.trashed).map((f) => f.name);
+  ok('add-items with an item id that does not start with "i-" is reported', badIdErr.some((n) => n.startsWith('ERROR') && n.includes('item "id" must start with "i-"') && n.endsWith('bad-id.json')), JSON.stringify(badIdErr));
+  await inbox('ERROR – "type" must be "new-board" or "add-items" – retry-upd.json', JSON.stringify({ type: 'update-items', board: updId, id: 'retry-upd-1', items: [{ id: otherId, text: 'from retried ERROR file' }] }));
+  await doSync();
+  upd = await ev((id) => __wb.db.get('boards', id), updId);
+  ok('Inbox retries a file named ERROR – "type" must be … and applies it', upd.items.find((i) => i.id === otherId).text === 'from retried ERROR file');
+  files = await ev(() => __wb.adapter._all());
+  ok('…and the retried file is moved to the Drive bin', files.filter((f) => f.folder === 'inbox' && /retry-upd\.json/.test(f.name)).every((f) => f.trashed));
+  await inbox('ERROR – "type" must be "new-board" or "add-items" – still-bad.json', JSON.stringify({ type: 'nope', board: updId, items: [{ id: 'x' }] }));
+  await doSync();
+  files = await ev(() => __wb.adapter._all());
+  const still = files.filter((f) => f.folder === 'inbox' && !f.trashed && /still-bad\.json/.test(f.name));
+  ok('A retried ERROR file that is still invalid is renamed once with the new type message', still.length === 1 && still[0].name.startsWith('ERROR – "type" must be') && still[0].name.includes('update-items') && still[0].name.endsWith('still-bad.json') && !/ERROR – ERROR/.test(still[0].name), JSON.stringify(still.map((f) => f.name)));
+  const stillName = still[0].name;
+  await doSync();
+  files = await ev(() => __wb.adapter._all());
+  const still2 = files.filter((f) => f.folder === 'inbox' && !f.trashed && /still-bad\.json/.test(f.name));
+  ok('A retried ERROR type file is not retried a second time', still2.length === 1 && still2[0].name === stillName && !files.some((f) => f.folder === 'inbox' && !f.trashed && /^ERROR – ERROR/.test(f.name)), JSON.stringify(still2.map((f) => f.name)));
   await p.screenshot({ path: '/tmp/f3-desk.png' });
 
   // a template edited on Drive (e.g. the updated Weekly Review copy) reaches devices that already have it
@@ -316,6 +400,12 @@ const mockSR = () => {
   await ev(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
   const pb = await ev(() => __wb.db.all('boards').then((a) => a.find((b) => b.name === 'Phone B')));
   ok('Phone: add-items inbox note lands on the board', !!(pb && pb.items.some((i) => i.text === 'from inbox')), pb && JSON.stringify(pb.items.map((i) => i.text)));
+  const phoneNote = pb.items.find((i) => i.text === 'from inbox');
+  await ev(([board, id]) => __wb.adapter.createFile('inbox', 'phone-upd.json', JSON.stringify({ type: 'update-items', board, id: 'phone-upd-1', items: [{ id, text: 'from inbox updated' }] }), 'application/json'), ['Phone B', phoneNote.id]);
+  await ev(() => __wb.sync.syncNow().then(() => __wb.sync.syncNow()));
+  const pb2 = await ev(() => __wb.db.all('boards').then((a) => a.find((b) => b.name === 'Phone B')));
+  const phoneNote2 = pb2 && pb2.items.find((i) => i.id === phoneNote.id);
+  ok('Phone: update-items patches the note and keeps its position', !!(phoneNote2 && phoneNote2.text === 'from inbox updated' && phoneNote2.x === phoneNote.x && phoneNote2.y === phoneNote.y), phoneNote2 && JSON.stringify(phoneNote2));
   await ctx.close();
 
 }

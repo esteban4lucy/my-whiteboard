@@ -185,6 +185,8 @@ Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devi
 
 **Add items to an existing board** (`"type": "add-items"`): sticky notes are added to the named board, which is then synced back to Drive.
 
+**Update items on an existing board** (`"type": "update-items"`): existing items (matched by `id`) are patched with only the fields you send. The board is then synced back to Drive.
+
 **File format.** Save it as a plain `.json` file with MIME type `application/json`, not as a Google Doc:
 
 ```json
@@ -202,7 +204,7 @@ Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devi
 
 | Field | Required | Meaning |
 |---|---|---|
-| `type` | yes | Must be `"new-board"` (or `"add-items"`, below). |
+| `type` | yes | Must be `"new-board"` (or `"add-items"` / `"update-items"`, below). |
 | `name` | yes | Board name. Replacements apply here too. |
 | `template` | no | Template name or id, case-insensitive: `Blank` (default), `Meeting Notes`, `Brainstorm`, `Project Plan`, `Kanban`, `Weekly Review`, or one of your saved templates. |
 | `replace` | no | `{ "text to find": "replacement" }`, applied to the name, note, text and frame titles. `{{date}}` defaults to today (e.g. "16 Nov 2026"). |
@@ -228,15 +230,41 @@ Put a small JSON file in **`Whiteboard/inbox/`**. The next time any of your devi
 | `type` | yes | Must be `"add-items"`. |
 | `board` | yes | Board id (preferred) or board name, case-insensitive. |
 | `id` | no, recommended | Idempotency key. The same `id` never adds the items a second time, even if the file is uploaded again. Without it, the Drive file id is used. |
-| `items` | yes | Non-empty array of sticky notes. Each may have `type` (`"note"`, the default), `text`, `x`, `y`, `w`, `h`, `color` (`#rrggbb`), `fontSize`, and optionally `tags` and `due` (`YYYY-MM-DD`). Defaults: 200×160, `#fff59d`, font size 20. If `x` or `y` is omitted, the note is placed in empty space near the centre of the board's existing content, without overlapping anything. |
+| `items` | yes | Non-empty array of sticky notes. Each may have `type` (`"note"`, the default), `text`, `x`, `y`, `w`, `h`, `color` (`#rrggbb`), `fontSize`, and optionally `tags` and `due` (`YYYY-MM-DD`). Defaults: 200×160, `#fff59d`, font size 20. If `x` or `y` is omitted, the note is placed in empty space near the centre of the board's existing content, without overlapping anything. An item may include `"id"` (must start with `i-`) to choose a stable id; otherwise the default `i-inbox-<file id>-<n>` is used. |
 
 A notice such as *Added 1 note to “Index Whiteboard” from your Drive inbox.* is shown when items are added.
 
-**Errors.** A file that can't be used (invalid JSON, missing `type`/`name`/`board`/`items`, unknown template or board, unsupported item type) is **not** deleted. It is renamed `ERROR – <reason> – <original name>` and stays in `inbox/`. The app shows a notice, and later syncs skip that file. Fix it, then upload it again under a new name.
+#### Update items on an existing board
+
+```json
+{
+  "type": "update-items",
+  "board": "b-25d9ab0b-5af1-4873-bc4f-7fd9366eca9c",
+  "id": "uk-kids-passport-status-2026-11-13a",
+  "items": [
+    { "id": "i-inbox-uk-kids-passport-list-2026-11-13-0", "text": "updated note text" }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `type` | yes | Must be `"update-items"`. |
+| `board` | yes | Board id (preferred) or board name, case-insensitive. |
+| `id` | no, recommended | Idempotency key. The same `id` is applied only once, even if the file is uploaded again. Without it, the Drive file id is used. Applying the same patch twice is harmless anyway (it writes the same fields). |
+| `items` | yes | Non-empty array. Each entry **must** have `id` (the existing item's id). Only the fields you include are changed: `text`, `color` (`#rrggbb`), `fontSize`, `tags`, `due` (`YYYY-MM-DD`), `x`, `y`, `w`, `h`. Position and size are left as the user set them unless `x`/`y`/`w`/`h` are given. |
+| `items[].upsert` | no | If `true` and no item with that `id` exists, a sticky note is created with that exact id (placed with the same non-overlapping auto-placement as add-items, unless `x` and `y` are given). Defaults for a new note: 200×160, `#fff59d`, font size 20. |
+
+A notice such as *Updated 1 note on “Index Whiteboard” from your Drive inbox.* is shown when items are updated. If some ids are not found (and `upsert` was not set), those entries are skipped and the notice says so. If **none** of the ids match, the file is treated as an error (renamed, not applied).
+
+**Errors.** A file that can't be used (invalid JSON, missing `type`/`name`/`board`/`items`, unknown template or board, unsupported item type, or an update that matches no items) is **not** deleted. It is renamed `ERROR – <reason> – <original name>` and stays in `inbox/`. The app shows a notice, and later syncs skip that file. Fix it, then upload it again under a new name.
+
+**Older app versions.** If a device still running an older version renamed a file `ERROR – "type" must be …` because it did not recognise a newer type (for example `"update-items"`), a later sync on a current version retries that file once: the `ERROR – "type" must be … – ` prefix is stripped and the file is processed normally. If it is still invalid, it is renamed again and is not retried a second time.
 
 **From a scheduled routine (Drive connector):** create a file named e.g. `weekly-review-2026-11-16.json` in the `inbox` folder (id below) with MIME type `application/json`. Turn off conversion to Google Docs (`disableConversionToGoogleType: true`). The content is the JSON above.
 * Minimal new-board example: `{"type":"new-board","name":"Weekly Review – 2026-11-16","template":"Weekly Review","replace":{"{{date}}":"16 Nov 2026"},"id":"wr-2026-11-16"}`.
 * Minimal add-items example: `{"type":"add-items","board":"Index Whiteboard","id":"fizzy-water-2026-11-12","items":[{"type":"note","text":"one bottle of fizzy water"}]}`.
+* Minimal update-items example: `{"type":"update-items","board":"Index Whiteboard","id":"uk-kids-passport-status-2026-11-13a","items":[{"id":"i-inbox-uk-kids-passport-list-2026-11-13-0","text":"updated note text"}]}`.
 * `inbox` folder id: `1y9BREB2GW9A6vsqyhbkG88UopoYcbaVa`.
 
 ## 6. Offline and sync behaviour
@@ -292,7 +320,7 @@ These automated browser tests ran in headless Chrome with real touch events, wit
   * camera input, and dictation with a simulated speech engine plus the fallback;
   * thumbnails, pin, tags, chips and filter, synced to Drive;
   * smoothing, rectangle/ellipse/line/arrow recognition, scribbles left alone, the toggles, and undo back to the stroke;
-  * inbox: board creation from a template with replacements, extra notes, idempotency, files trashed, ERROR renames, unknown template, and the default `{{date}}`; add-items to an existing board (by id or name, defaults, auto-placement without overlap, idempotency, notices, ERROR cases), also through the real Drive adapter.
+  * inbox: board creation from a template with replacements, extra notes, idempotency, files trashed, ERROR renames, unknown template, and the default `{{date}}`; add-items to an existing board (by id or name, defaults, auto-placement without overlap, explicit stable item ids, idempotency, notices, ERROR cases); update-items (patch only provided fields, keep position/size, skip missing ids, upsert, idempotency, notices, ERROR when none match); retry of files named `ERROR – "type" must be …` from an older app version (once); also through the real Drive adapter.
 * **Connectors, Kanban notes, frames, arrange & layers (desktop + 390 px phone):** arrows attach and follow notes, end handles detach and re-attach, Connect button, duplicated arrows stay wired to the copies, column snapping (centring, stacking, on/off), tags and due dates, checklist ticking, search by tag, PNG export, frames carry their contents, collapse/expand, put in a frame, mini-map jump, present mode (keys, buttons, swipe), align and distribute, snap to grid, layer order, background layer and its lock, undo for every action, persistence through Drive sync, and older boards.
 * **Lock, group & text format (desktop + 390 px phone):** Shift-click and box-select, phone multi-select mode, group move/resize, lock/unlock (incl. long-press on phone and *Unlock all*), locked items can't be moved, erased or deleted, Ctrl+A/G/L/B/I, text size/colour/bold/italic, undo/redo of every action, persistence through Drive sync and reload, PNG/PDF export, the Kanban template, and older boards without the new fields.
 * **Whiteboard features:** drawing tools, notes, shapes, text, eraser, undo/redo, zoom/pan, pinch, boards, templates, search, PNG/PDF/JSON export and import, and the theme setting.
